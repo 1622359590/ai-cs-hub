@@ -48,9 +48,8 @@ So I built this system. The core idea: **AI-first support with human escalation.
 - 支持 BM25 + 向量混合检索
 
 #### 🎓 教程中心改版
-- 分类从平台导向改为产品导向：使用入门、AI获客、AI销售、产品功能、养号攻略、常见问题
-- 新增 9 篇产品教程（产品介绍、设备绑定、24h任务配置、素材库、客资线索、知识库、智能体、AI销售SOP、FAQ）
-- 新增 6 条产品FAQ
+- 分类从平台导向改为产品导向
+- 新增产品教程和FAQ
 - 教程底部CTA从「提交工单」改为「咨询小助手」
 
 #### 🖼️ 素材库
