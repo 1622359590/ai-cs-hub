@@ -5,7 +5,7 @@ import Header from '@/components/layout/Header';
 import Footer from '@/components/layout/Footer';
 import { faqApi } from '@/lib/api';
 
-const defaultCategories = ['全部', '账号', '教程', '抖音', '快手', '小红书', '微信', '通用'];
+const defaultCategories = ['全部', '使用入门', 'AI获客', 'AI销售', '产品功能', '养号攻略', '常见问题', '通用'];
 
 interface Faq {
   id: number;

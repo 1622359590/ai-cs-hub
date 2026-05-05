@@ -6,6 +6,8 @@ import Header from '@/components/layout/Header';
 import Footer from '@/components/layout/Footer';
 import { aiApi, authApi } from '@/lib/api';
 import { showToast } from '@/components/ui/Toast';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface Message {
   id?: number;
@@ -43,30 +45,12 @@ export default function SupportPage() {
     }
   }, [messages]);
 
-  // 初始化对话
+  // 初始化：显示欢迎消息（不创建对话，发消息时才创建）
   useEffect(() => {
-    const init = async () => {
-      try {
-        const token = localStorage.getItem('imai-token');
-        let guestName = '';
-        if (token) {
-          try {
-            const me = await authApi.getMe();
-            guestName = me.user?.nickname || me.user?.phone || '';
-          } catch {}
-        }
-        const res = await aiApi.createConversation(guestName);
-        setConversationId(res.conversation.id);
-        // 欢迎消息
-        setMessages([{
-          role: 'assistant',
-          content: '嗨～我是 imai小助手 ✨\n\n养号、获客、短视频运营的问题都可以问我～解决不了我帮你转人工 💪',
-        }]);
-      } catch (err: any) {
-        showToast('创建对话失败: ' + err.message, 'error');
-      }
-    };
-    init();
+    setMessages([{
+      role: 'assistant',
+      content: '嗨～我是 imai小助手 ✨\n\n养号、获客、短视频运营的问题都可以问我～解决不了我帮你转人工 💪',
+    }]);
   }, []);
 
   // 上传图片
@@ -138,7 +122,25 @@ export default function SupportPage() {
   const handleSend = async () => {
     const text = input.trim();
     if (!text && !imageUrl) return;
-    if (!conversationId || sending) return;
+    if (sending) return;
+
+    // 懒创建对话：第一条消息时才创建
+    let convId = conversationId;
+    if (!convId) {
+      try {
+        const token = localStorage.getItem('imai-token');
+        let guestName = '';
+        if (token) {
+          try { const me = await authApi.getMe(); guestName = me.user?.nickname || me.user?.phone || ''; } catch {}
+        }
+        const res = await aiApi.createConversation(guestName);
+        convId = res.conversation.id;
+        setConversationId(convId);
+      } catch (err: any) {
+        showToast('创建对话失败: ' + err.message, 'error');
+        return;
+      }
+    }
 
     const userMsg: Message = { role: 'user', content: text, image_url: imageUrl };
     setMessages(prev => [...prev, userMsg]);
@@ -151,7 +153,7 @@ export default function SupportPage() {
     }, 50);
 
     try {
-      const res = await aiApi.sendMessage(conversationId, text, imageUrl);
+      const res = await aiApi.sendMessage(convId!, text, imageUrl);
       shouldScrollRef.current = true;
 
       // 打字机效果：先加空消息，再逐字填充
@@ -201,6 +203,17 @@ export default function SupportPage() {
       ));
       showToast(rating === 1 ? '感谢你的反馈！' : '已记录，会持续改进', 'success');
     } catch {}
+  };
+
+  // 开始新对话
+  const handleNewConversation = async () => {
+    // 先关闭当前对话
+    if (conversationId) {
+      try { await aiApi.endConversation(conversationId); } catch {}
+    }
+    setConversationId(null);
+    setMessages([{ role: 'assistant', content: '嗨～我是 imai小助手 ✨\n\n养号、获客、短视频运营的问题都可以问我～解决不了我帮你转人工 💪' }]);
+    inputRef.current?.focus();
   };
 
   // 转人工
@@ -280,10 +293,10 @@ export default function SupportPage() {
 
   // 快捷问题
   const quickQuestions = [
-    'AI手机怎么收费？',
+    'AI获客怎么配置？',
     '抖音养号有什么技巧？',
-    '系统怎么登录后台？',
-    '收货地址是什么？',
+    '设备绑定失败怎么办？',
+    '24小时任务怎么启动？',
   ];
 
   return (
@@ -319,6 +332,15 @@ export default function SupportPage() {
                 </svg>
                 转人工
               </button>
+              {conversationId && (
+                <button
+                  onClick={handleNewConversation}
+                  className="flex items-center gap-1.5 rounded-full border border-[#e2e8f0] px-3 py-2 text-sm text-[#94a3b8] hover:border-[#8b5cf6] hover:text-[#8b5cf6] transition-all"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14"/></svg>
+                  新对话
+                </button>
+              )}
             </div>
           </div>
 
@@ -336,12 +358,16 @@ export default function SupportPage() {
                       </div>
                     )}
                     {/* 消息气泡 */}
-                    <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+                    <div className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                       msg.role === 'user'
-                        ? 'bg-[#8b5cf6] text-white rounded-br-md'
-                        : 'bg-white border border-[#e2e8f0] text-[#1e293b] rounded-bl-md'
+                        ? 'bg-[#8b5cf6] text-white rounded-br-md whitespace-pre-wrap'
+                        : 'bg-white border border-[#e2e8f0] text-[#1e293b] rounded-bl-md chat-markdown'
                     }`}>
-                      {msg.content}
+                      {msg.role === 'assistant' ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      ) : (
+                        <span className="whitespace-pre-wrap">{msg.content}</span>
+                      )}
                     </div>
                     {/* 评分按钮（仅 AI 消息） */}
                     {msg.role === 'assistant' && msg.id && (

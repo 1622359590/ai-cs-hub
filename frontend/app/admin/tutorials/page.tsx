@@ -4,8 +4,9 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { adminApi } from '@/lib/api';
 import { showToast } from '@/components/ui/Toast';
+import Pagination from '@/components/ui/Pagination';
 
-const categories = ['全部', '抖音', '快手', '小红书', '微信', '其他'];
+const categories = ['全部', '使用入门', 'AI获客', 'AI销售', '产品功能', '养号攻略', '常见问题', '其他'];
 const statuses = ['全部', 'published', 'draft'];
 
 interface Tutorial {
@@ -14,6 +15,7 @@ interface Tutorial {
   category: string;
   status: string;
   views: number;
+  vip_only: number;
   created_at: string;
 }
 
@@ -23,6 +25,8 @@ export default function AdminTutorialsPage() {
   const [category, setCategory] = useState('全部');
   const [status, setStatus] = useState('全部');
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
   const fetchTutorials = () => {
     setLoading(true);
@@ -32,10 +36,12 @@ export default function AdminTutorialsPage() {
 
     adminApi.getTutorials(params).then(res => {
       setTutorials(res.tutorials || []);
-    }).catch(console.error).finally(() => setLoading(false));
+    }).catch(() => showToast('获取教程失败', 'error')).finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchTutorials(); }, [category, status]);
+  useEffect(() => { fetchTutorials(); setPage(1); }, [category, status]);
+
+  const pagedTutorials = tutorials.slice((page - 1) * pageSize, page * pageSize);
 
   const handleDelete = async (id: number) => {
     try {
@@ -84,6 +90,7 @@ export default function AdminTutorialsPage() {
         ) : tutorials.length === 0 ? (
           <div className="mt-8 py-12 text-center text-[#94a3b8]">暂无教程</div>
         ) : (
+          <>
           <table className="mt-6 w-full">
             <thead>
               <tr>
@@ -97,7 +104,7 @@ export default function AdminTutorialsPage() {
               </tr>
             </thead>
             <tbody>
-              {tutorials.map((t) => (
+              {pagedTutorials.map((t) => (
                 <tr key={t.id}>
                   <td className="font-medium max-w-[300px] truncate">{t.title}</td>
                   <td><span className="tag">{t.category}</span></td>
@@ -163,6 +170,8 @@ export default function AdminTutorialsPage() {
               ))}
             </tbody>
           </table>
+          <Pagination page={page} total={tutorials.length} pageSize={pageSize} onChange={setPage} />
+          </>
         )}
       </div>
 

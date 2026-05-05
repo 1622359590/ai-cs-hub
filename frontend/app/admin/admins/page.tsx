@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { showToast } from '@/components/ui/Toast';
+import { adminApi } from '@/lib/api';
+import Pagination from '@/components/ui/Pagination';
 
 interface Admin {
   id: number;
@@ -21,31 +23,25 @@ export default function AdminAdminsPage() {
   const [newRole, setNewRole] = useState('editor');
   const [creating, setCreating] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-
-  const token = () => localStorage.getItem('imai-admin-token');
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
   const fetchAdmins = () => {
     setLoading(true);
-    fetch('/api/admin/admins', {
-      headers: { Authorization: `Bearer ${token()}` }
-    }).then(r => r.json()).then(res => {
+    adminApi.getAdmins().then(res => {
       setAdmins(res.admins || []);
-    }).catch(console.error).finally(() => setLoading(false));
+    }).catch(() => showToast('获取管理员列表失败', 'error')).finally(() => setLoading(false));
   };
 
   useEffect(() => { fetchAdmins(); }, []);
+
+  const pagedAdmins = admins.slice((page - 1) * pageSize, page * pageSize);
 
   const handleCreate = async () => {
     if (!newUsername || !newPwd) { showToast('请填写用户名和密码', 'error'); return; }
     setCreating(true);
     try {
-      const res = await fetch('/api/admin/admins', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token()}` },
-        body: JSON.stringify({ username: newUsername, password: newPwd, nickname: newNick, role: newRole })
-      });
-      const data = await res.json();
-      if (!res.ok) { showToast(data.error || '创建失败', 'error'); return; }
+      await adminApi.createAdmin({ username: newUsername, password: newPwd, nickname: newNick, role: newRole });
       showToast('管理员创建成功', 'success');
       setShowCreate(false);
       setNewUsername(''); setNewPwd(''); setNewNick('');
@@ -56,12 +52,7 @@ export default function AdminAdminsPage() {
 
   const handleDelete = async (id: number) => {
     try {
-      const res = await fetch(`/api/admin/admins/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token()}` }
-      });
-      const data = await res.json();
-      if (!res.ok) { showToast(data.error || '删除失败', 'error'); return; }
+      await adminApi.deleteAdmin(id);
       showToast('已删除', 'success');
       setDeleteId(null);
       fetchAdmins();
@@ -85,6 +76,7 @@ export default function AdminAdminsPage() {
         ) : admins.length === 0 ? (
           <div className="py-12 text-center text-[#94a3b8]">暂无管理员</div>
         ) : (
+          <>
           <table className="w-full">
             <thead>
               <tr>
@@ -97,7 +89,7 @@ export default function AdminAdminsPage() {
               </tr>
             </thead>
             <tbody>
-              {admins.map((a) => (
+              {pagedAdmins.map((a) => (
                 <tr key={a.id}>
                   <td className="text-xs font-mono">{a.id}</td>
                   <td className="font-medium">{a.username}</td>
@@ -122,6 +114,8 @@ export default function AdminAdminsPage() {
               ))}
             </tbody>
           </table>
+          <Pagination page={page} total={admins.length} pageSize={pageSize} onChange={setPage} />
+          </>
         )}
       </div>
     </div>

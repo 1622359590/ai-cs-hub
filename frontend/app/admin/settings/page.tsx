@@ -10,6 +10,7 @@ interface Settings {
 
 const sections = [
   { id: 'site', label: '网站信息', icon: '🌐' },
+  { id: 'storage', label: '存储设置', icon: '☁️' },
   { id: 'sms', label: '短信平台', icon: '📱' },
   { id: 'wechat', label: '微信登录', icon: '💬' },
   { id: 'feishu', label: '飞书集成', icon: '🏢' },
@@ -147,6 +148,75 @@ export default function AdminSettingsPage() {
                 <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">ICP 备案号</label>
                 <input value={settings.icp_number || ''} onChange={e => update('icp_number', e.target.value)} placeholder="沪ICP备2024xxxxxx号" className="input" />
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* === 存储设置 === */}
+        {activeSection === 'storage' && (
+          <div className="card">
+            <div className="flex items-center gap-3 rounded-lg bg-gradient-to-r from-[#0ea5e9]/10 to-[#06b6d4]/10 p-4 mb-5">
+              <span className="text-2xl">☁️</span>
+              <div>
+                <p className="text-sm font-semibold text-[#1e293b]">文件存储</p>
+                <p className="text-xs text-[#64748b]">配置图片、文件的存储方式。默认使用本地存储，可切换为 OSS 云存储</p>
+              </div>
+            </div>
+            <div className="space-y-5">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">存储方式</label>
+                <select value={settings.storage_type || 'local'} onChange={e => update('storage_type', e.target.value)} className="select">
+                  <option value="local">本地存储</option>
+                  <option value="oss">阿里云 OSS</option>
+                  <option value="qiniu">七牛云</option>
+                  <option value="cos">腾讯云 COS</option>
+                </select>
+                <p className="mt-1.5 text-xs text-[#94a3b8]">切换后新上传的文件将存储到对应位置，已上传的文件不受影响</p>
+              </div>
+
+              {settings.storage_type && settings.storage_type !== 'local' && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">Bucket / 空间名</label>
+                      <input value={settings.oss_bucket || ''} onChange={e => update('oss_bucket', e.target.value)} placeholder="my-bucket" className="input" />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">区域 / Region</label>
+                      <input value={settings.oss_region || ''} onChange={e => update('oss_region', e.target.value)} placeholder="oss-cn-shenzhen" className="input" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">访问域名（Endpoint）</label>
+                    <input value={settings.oss_endpoint || ''} onChange={e => update('oss_endpoint', e.target.value)} placeholder="https://oss-cn-shenzhen.aliyuncs.com" className="input" />
+                    <p className="mt-1 text-xs text-[#94a3b8]">OSS 的外网访问域名</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">AccessKey ID</label>
+                      <input value={settings.oss_access_key || ''} onChange={e => update('oss_access_key', e.target.value)} className="input" type="password" />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">AccessKey Secret</label>
+                      <input value={settings.oss_secret_key || ''} onChange={e => update('oss_secret_key', e.target.value)} className="input" type="password" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">自定义域名（可选）</label>
+                    <input value={settings.oss_cdn_domain || ''} onChange={e => update('oss_cdn_domain', e.target.value)} placeholder="https://cdn.yourdomain.com" className="input" />
+                    <p className="mt-1 text-xs text-[#94a3b8]">如果配置了 CDN 加速域名，上传后的文件 URL 将使用此域名</p>
+                  </div>
+                </>
+              )}
+
+              {settings.storage_type === 'local' && (
+                <div className="rounded-lg bg-[#f8fafc] border border-[#e2e8f0] p-4">
+                  <p className="text-sm text-[#64748b]">
+                    📁 当前使用本地存储，文件保存在服务器 <code className="bg-[#f1f5f9] px-1.5 py-0.5 rounded text-xs">uploads/</code> 目录下。
+                  </p>
+                  <p className="mt-2 text-xs text-[#94a3b8]">适合开发测试环境。生产环境建议切换为 OSS 云存储，避免服务器迁移时文件丢失。</p>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -313,7 +383,7 @@ export default function AdminSettingsPage() {
                   <svg className="mx-auto h-10 w-10 text-[#cbd5e1]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
                   <p className="mt-2 text-sm font-medium text-[#1e293b]">知识库管理</p>
                   <p className="mt-1 text-xs text-[#94a3b8]">上传文档、FAQ、教程内容，AI 将基于这些知识回答用户问题</p>
-                  <button className="btn btn-secondary btn-sm mt-3" disabled>即将开放</button>
+                  <a href="/admin/ai" className="btn btn-primary btn-sm mt-3 inline-block">前往管理知识库 →</a>
                 </div>
               </div>
             </div>

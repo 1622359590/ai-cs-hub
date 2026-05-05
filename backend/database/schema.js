@@ -143,6 +143,19 @@ function initSchema() {
     // 索引已存在则忽略
   }
 
+  // 性能索引：高频查询字段
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+    CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON tickets(user_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation ON ai_messages(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_conversations_user ON ai_conversations(user_id);
+    CREATE INDEX IF NOT EXISTS idx_tutorials_status ON tutorials(status);
+    CREATE INDEX IF NOT EXISTS idx_tutorials_category ON tutorials(category);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_status ON knowledge_base(status);
+    CREATE INDEX IF NOT EXISTS idx_ai_knowledge_status ON ai_knowledge(status);
+    CREATE INDEX IF NOT EXISTS idx_faqs_status ON faqs(status);
+  `);
+
   // 迁移：给 tickets 表添加 reply 字段（管理员回复）
   try {
     db.exec("ALTER TABLE tickets ADD COLUMN reply TEXT DEFAULT ''");

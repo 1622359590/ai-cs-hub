@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { aiAdminApi } from '@/lib/api';
 import { showToast } from '@/components/ui/Toast';
+import Pagination from '@/components/ui/Pagination';
 
 interface Conversation {
   id: number;
@@ -32,6 +33,9 @@ export default function ConversationsPage() {
   const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+  const pagedConvs = conversations.slice((page - 1) * pageSize, page * pageSize);
 
   useEffect(() => {
     aiAdminApi.getConversations()
@@ -56,6 +60,22 @@ export default function ConversationsPage() {
     }
   };
 
+  const handleCloseConv = async (convId: number) => {
+    if (!confirm('确定关闭此对话？')) return;
+    try {
+      const res = await fetch(`/api/ai/conversations/${convId}/close`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${localStorage.getItem('imai-admin-token')}` },
+      });
+      if (!res.ok) throw new Error('关闭失败');
+      setConversations(prev => prev.map(c => c.id === convId ? { ...c, status: 'closed' } : c));
+      if (selectedConv?.id === convId) setSelectedConv(prev => prev ? { ...prev, status: 'closed' } : null);
+      showToast('对话已关闭', 'success');
+    } catch {
+      showToast('关闭失败', 'error');
+    }
+  };
+
   const statusLabels: Record<string, { label: string; color: string; bg: string }> = {
     active: { label: '进行中', color: 'text-[#2563eb]', bg: 'bg-[#dbeafe]' },
     transferred: { label: '已转人工', color: 'text-[#d97706]', bg: 'bg-[#fef3c7]' },
@@ -75,7 +95,7 @@ export default function ConversationsPage() {
             <div className="p-8 text-center text-sm text-[#94a3b8]">暂无对话记录</div>
           ) : (
             <div className="divide-y divide-[#e2e8f0]">
-              {conversations.map(conv => {
+              {pagedConvs.map(conv => {
                 const sl = statusLabels[conv.status] || statusLabels.active;
                 return (
                   <button
@@ -96,6 +116,7 @@ export default function ConversationsPage() {
               })}
             </div>
           )}
+          <Pagination page={page} total={conversations.length} pageSize={pageSize} onChange={setPage} />
         </div>
 
         {/* 右侧消息详情 */}
@@ -107,13 +128,26 @@ export default function ConversationsPage() {
           ) : (
             <>
               {/* 头部 */}
-              <div className="border-b border-[#e2e8f0] px-4 py-3">
-                <p className="text-sm font-medium text-[#1e293b]">
-                  {selectedConv.nickname || selectedConv.guest_name || selectedConv.phone || `访客${selectedConv.id}`}
-                </p>
-                <p className="text-xs text-[#94a3b8]">
-                  对话 #{selectedConv.id} · {selectedConv.message_count} 条消息 · {selectedConv.created_at?.split('.')[0]?.replace('T', ' ')}
-                </p>
+              <div className="border-b border-[#e2e8f0] px-4 py-3 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-[#1e293b]">
+                    {selectedConv.nickname || selectedConv.guest_name || selectedConv.phone || `访客${selectedConv.id}`}
+                  </p>
+                  <p className="text-xs text-[#94a3b8]">
+                    对话 #{selectedConv.id} · {selectedConv.message_count} 条消息 · {selectedConv.created_at?.split('.')[0]?.replace('T', ' ')}
+                  </p>
+                </div>
+                {selectedConv.status !== 'closed' && (
+                  <button
+                    onClick={() => handleCloseConv(selectedConv.id)}
+                    className="rounded-lg border border-[#e2e8f0] px-3 py-1.5 text-xs text-[#ef4444] hover:border-[#ef4444] hover:bg-[#fef2f2] transition-all"
+                  >
+                    关闭对话
+                  </button>
+                )}
+                {selectedConv.status === 'closed' && (
+                  <span className="text-xs text-[#94a3b8] bg-[#f1f5f9] px-2.5 py-1 rounded-full">已关闭</span>
+                )}
               </div>
 
               {/* 消息列表 */}

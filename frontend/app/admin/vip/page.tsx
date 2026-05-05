@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { adminApi } from '@/lib/api';
 import { showToast } from '@/components/ui/Toast';
 import VIPBadge from '@/components/ui/VIPBadge';
+import Pagination from '@/components/ui/Pagination';
 
 interface User {
   id: number;
@@ -18,6 +19,9 @@ interface User {
 export default function AdminVIPPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
   const [editUser, setEditUser] = useState<User | null>(null);
   const [vipDays, setVipDays] = useState(30);
 
@@ -29,6 +33,14 @@ export default function AdminVIPPage() {
   };
 
   useEffect(() => { fetchUsers(); }, []);
+
+  // 搜索过滤
+  const filteredUsers = users.filter(u => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return u.phone.includes(q) || (u.nickname || '').toLowerCase().includes(q);
+  });
+  const pagedUsers = filteredUsers.slice((page - 1) * pageSize, page * pageSize);
 
   const handleSetVIP = async (userId: number, days: number) => {
     const expires = new Date();
@@ -65,7 +77,15 @@ export default function AdminVIPPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold text-[#1e293b]">VIP 会员管理</h1>
-        <span className="text-sm text-[#64748b]">共 {users.length} 位用户</span>
+        <div className="flex items-center gap-3">
+          <input
+            value={search}
+            onChange={e => { setSearch(e.target.value); setPage(1); }}
+            placeholder="搜索手机号/昵称"
+            className="px-3 py-1.5 text-sm border border-[#e2e8f0] rounded-full outline-none focus:border-[#8b5cf6] w-48"
+          />
+          <span className="text-sm text-[#64748b]">{filteredUsers.length} / {users.length}</span>
+        </div>
       </div>
 
       <div className="card">
@@ -74,6 +94,7 @@ export default function AdminVIPPage() {
         ) : users.length === 0 ? (
           <div className="py-12 text-center text-[#94a3b8]">暂无用户</div>
         ) : (
+          <>
           <table className="w-full">
             <thead>
               <tr>
@@ -86,7 +107,7 @@ export default function AdminVIPPage() {
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => {
+              {pagedUsers.map((u) => {
                 const expired = u.vip === 1 && isExpired(u.vip_expires_at);
                 return (
                   <tr key={u.id}>
@@ -130,6 +151,8 @@ export default function AdminVIPPage() {
               })}
             </tbody>
           </table>
+          <Pagination page={page} total={filteredUsers.length} pageSize={pageSize} onChange={setPage} />
+          </>
         )}
       </div>
 

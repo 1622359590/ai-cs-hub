@@ -3,14 +3,16 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { adminApi } from '@/lib/api';
+import { showToast } from '@/components/ui/Toast';
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState({ tutorials: 0, published: 0, faqs: 0, users: 0, todayViews: 0, tickets: 0, ticketsPending: 0, ticketsProcessing: 0, ticketsResolved: 0 });
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     adminApi.getStats().then(res => {
       setStats(res.stats);
-    }).catch(console.error);
+    }).catch(() => showToast('获取统计数据失败', 'error')).finally(() => setLoading(false));
   }, []);
 
   const statCards = [
@@ -27,7 +29,11 @@ export default function AdminDashboard() {
         {statCards.map((card) => (
           <div key={card.label} className="card">
             <p className="text-sm text-[#64748b]">{card.label}</p>
-            <p className={`mt-2 text-3xl font-bold ${card.color}`}>{card.value}</p>
+            {loading ? (
+              <div className="mt-2 h-9 w-16 animate-pulse rounded bg-[#f1f5f9]" />
+            ) : (
+              <p className={`mt-2 text-3xl font-bold ${card.color}`}>{card.value}</p>
+            )}
           </div>
         ))}
       </div>

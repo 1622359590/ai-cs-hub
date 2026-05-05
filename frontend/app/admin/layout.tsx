@@ -61,10 +61,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-[#e2e8f0] bg-white px-6">
           <h1 className="text-lg font-semibold text-[#1e293b]">后台管理</h1>
           <div className="flex items-center gap-3">
-            <button onClick={() => setShowSettings(true)} className="flex items-center gap-1.5 rounded-lg border border-[#e2e8f0] px-3 py-1.5 text-xs text-[#64748b] hover:bg-[#f1f5f9] transition-colors">
+            <Link href="/admin/settings" className="flex items-center gap-1.5 rounded-lg border border-[#e2e8f0] px-3 py-1.5 text-xs text-[#64748b] hover:bg-[#f1f5f9] transition-colors">
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
               设置
-            </button>
+            </Link>
             <span className="text-sm text-[#64748b]">{user?.nickname || user?.phone}</span>
             <button
               onClick={() => { localStorage.removeItem('imai-admin-token'); router.push('/admin-login'); }}
@@ -76,7 +76,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </header>
         <main className="p-6">{children}</main>
       </div>
-      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
       <ToastContainer />
     </div>
   );

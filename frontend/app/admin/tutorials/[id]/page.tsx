@@ -7,7 +7,7 @@ import { adminApi } from '@/lib/api';
 import { showToast } from '@/components/ui/Toast';
 import RichEditor from '@/components/ui/RichEditor';
 
-const categories = ['抖音', '快手', '小红书', '微信', '其他'];
+const categories = ['使用入门', 'AI获客', 'AI销售', '产品功能', '养号攻略', '常见问题', '其他'];
 
 export default function EditTutorialPage() {
   const router = useRouter();

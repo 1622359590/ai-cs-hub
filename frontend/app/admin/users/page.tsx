@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { adminApi } from '@/lib/api';
 import { showToast } from '@/components/ui/Toast';
 import VIPBadge from '@/components/ui/VIPBadge';
+import Pagination from '@/components/ui/Pagination';
 
 interface User {
   id: number;
@@ -63,6 +64,8 @@ export default function AdminUsersPage() {
   // 导入
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
   // 过滤后的用户
   const filteredUsers = users.filter(u => {
@@ -73,6 +76,7 @@ export default function AdminUsersPage() {
     if (filterLevel > 0 && u.customer_level_id !== filterLevel) return false;
     return true;
   });
+  const pagedUsers = filteredUsers.slice((page - 1) * pageSize, page * pageSize);
 
   const fetchUsers = () => {
     setLoading(true);
@@ -264,6 +268,7 @@ export default function AdminUsersPage() {
         ) : filteredUsers.length === 0 ? (
           <div className="py-12 text-center text-[#94a3b8]">{hasActiveFilter ? '未找到匹配用户' : '暂无用户'}</div>
         ) : (
+          <>
           <table className="w-full whitespace-nowrap">
             <thead>
               <tr>
@@ -278,7 +283,7 @@ export default function AdminUsersPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredUsers.map((u) => {
+              {pagedUsers.map((u) => {
                 const expired = u.vip === 1 && isExpired(u.vip_expires_at);
                 return (
                 <tr key={u.id} className="group">
@@ -324,6 +329,8 @@ export default function AdminUsersPage() {
               )})}
             </tbody>
           </table>
+          <Pagination page={page} total={filteredUsers.length} pageSize={pageSize} onChange={setPage} />
+          </>
         )}
       </div>
     </div>

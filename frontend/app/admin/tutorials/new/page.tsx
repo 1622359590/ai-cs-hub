@@ -10,7 +10,7 @@ import RichEditor from '@/components/ui/RichEditor';
 export default function NewTutorialPage() {
   const router = useRouter();
   const [title, setTitle] = useState('');
-  const [category, setCategory] = useState('抖音');
+  const [category, setCategory] = useState('使用入门');
   const [content, setContent] = useState('');
   const [summary, setSummary] = useState('');
   const [tags, setTags] = useState('');

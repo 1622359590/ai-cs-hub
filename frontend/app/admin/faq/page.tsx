@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react';
 import { adminApi } from '@/lib/api';
 import { showToast } from '@/components/ui/Toast';
+import Pagination from '@/components/ui/Pagination';
 
-const categories = ['通用', '账号', '教程', '抖音', '快手', '小红书', '微信'];
+const categories = ['通用', '使用入门', 'AI获客', 'AI销售', '产品功能', '养号攻略', '常见问题'];
 
 interface Faq {
   id: number;
@@ -22,6 +23,9 @@ export default function AdminFAQPage() {
   const [editFaq, setEditFaq] = useState<Partial<Faq> | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+  const pagedFaqs = faqs.slice((page - 1) * pageSize, page * pageSize);
 
   const fetchFaqs = () => {
     setLoading(true);
@@ -87,6 +91,7 @@ export default function AdminFAQPage() {
         ) : faqs.length === 0 ? (
           <div className="mt-8 py-12 text-center text-[#94a3b8]">暂无FAQ</div>
         ) : (
+          <>
           <table className="mt-6 w-full">
             <thead>
               <tr>
@@ -99,7 +104,7 @@ export default function AdminFAQPage() {
               </tr>
             </thead>
             <tbody>
-              {faqs.map((f) => (
+              {pagedFaqs.map((f) => (
                 <tr key={f.id}>
                   <td className="font-medium max-w-[300px] truncate">{f.question}</td>
                   <td><span className="tag">{f.category}</span></td>
@@ -123,6 +128,8 @@ export default function AdminFAQPage() {
               ))}
             </tbody>
           </table>
+          <Pagination page={page} total={faqs.length} pageSize={pageSize} onChange={setPage} />
+          </>
         )}
       </div>
 

@@ -1,6 +1,9 @@
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
+const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
@@ -10,7 +13,9 @@ const { verifyToken, verifyAdminToken, requireAdmin, JWT_SECRET, ADMIN_JWT_SECRE
 const { createRecord: feishuCreateRecord } = require('./services/feishu');
 const { sendTicketNotification } = require('./services/notify');
 const { chat: aiChat, getAIConfig } = require('./services/ai');
-const { rebuildIndex: rebuildRagIndex } = require('./services/rag');
+const { aiQueue } = require('./services/queue');
+const { rebuildIndex: rebuildRagIndex, findSimilarLearned, cleanupLearned } = require('./services/rag');
+const { parseDocument } = require('./services/doc-parser');
 
 const app = express();
 const PORT = 37888;
@@ -25,7 +30,24 @@ const corsOptions = {
   credentials: true,
 };
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(compression());  // gzip 压缩响应
+app.use(express.json({ limit: '1mb' }));  // 限制 JSON body 大小
+
+// 全局限流：每 IP 每分钟 120 次请求
+app.use('/api', rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '请求过于频繁，请稍后再试' },
+}));
+
+// AI 接口单独限流：每 IP 每分钟 20 次
+app.use('/api/ai/chat', rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  message: { error: 'AI 对话请求过于频繁，请稍后再试' },
+}));
 
 // ===== 全局禁用 API 缓存（防止浏览器 304 导致前端解析失败）=====
 app.use('/api', (req, res, next) => {
@@ -96,7 +118,7 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
 // ============================================================
 
 // 注册
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   try {
     const { phone, password, nickname } = req.body;
 
@@ -120,7 +142,7 @@ app.post('/api/auth/register', (req, res) => {
       return res.status(409).json({ error: '该手机号已注册' });
     }
 
-    const hashedPassword = bcrypt.hashSync(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
     const result = db.prepare(
       'INSERT INTO users (phone, password, nickname) VALUES (?, ?, ?)'
     ).run(phone, hashedPassword, nickname || phone);
@@ -140,7 +162,7 @@ app.post('/api/auth/register', (req, res) => {
 });
 
 // 登录
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   try {
     const { phone, password } = req.body;
 
@@ -155,7 +177,7 @@ app.post('/api/auth/login', (req, res) => {
       return res.status(401).json({ error: '手机号或密码错误' });
     }
 
-    const isMatch = bcrypt.compareSync(password, user.password);
+    const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ error: '手机号或密码错误' });
     }
@@ -184,14 +206,14 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // 管理员登录（用户名+密码，使用独立 admins 表）
-app.post('/api/admin/auth/login', (req, res) => {
+app.post('/api/admin/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: '请输入管理员账号和密码' });
     const db = getDb();
     const admin = db.prepare('SELECT * FROM admins WHERE username = ?').get(username);
     if (!admin) return res.status(401).json({ error: '管理员账号或密码错误' });
-    const isMatch = require('bcryptjs').compareSync(password, admin.password);
+    const isMatch = await bcrypt.compare(password, admin.password);
     if (!isMatch) return res.status(401).json({ error: '管理员账号或密码错误' });
     const token = jwt.sign({ id: admin.id, username: admin.username, nickname: admin.nickname, role: admin.role }, ADMIN_JWT_SECRET, { expiresIn:'7d' });
     res.json({ token, user: { id: admin.id, username: admin.username, nickname: admin.nickname, role: admin.role } });
@@ -413,6 +435,7 @@ app.post('/api/admin/tutorials', verifyAdminToken, requireAdmin, (req, res) => {
     );
 
     const tutorial = db.prepare('SELECT * FROM tutorials WHERE id = ?').get(result.lastInsertRowid);
+    try { rebuildRagIndex(); } catch {}
     res.status(201).json({ message: '创建成功', tutorial });
   } catch (err) {
     console.error('创建教程失败:', err);
@@ -456,6 +479,7 @@ app.put('/api/admin/tutorials/:id', verifyAdminToken, requireAdmin, (req, res) =
     );
 
     const tutorial = db.prepare('SELECT * FROM tutorials WHERE id = ?').get(req.params.id);
+    try { rebuildRagIndex(); } catch {}
     res.json({ message: '更新成功', tutorial });
   } catch (err) {
     console.error('更新教程失败:', err);
@@ -474,6 +498,7 @@ app.delete('/api/admin/tutorials/:id', verifyAdminToken, requireAdmin, (req, res
     }
 
     db.prepare('DELETE FROM tutorials WHERE id = ?').run(req.params.id);
+    try { rebuildRagIndex(); } catch {}
     res.json({ message: '删除成功' });
   } catch (err) {
     console.error('删除教程失败:', err);
@@ -537,6 +562,7 @@ app.post('/api/admin/faqs', verifyAdminToken, requireAdmin, (req, res) => {
     );
 
     const faq = db.prepare('SELECT * FROM faqs WHERE id = ?').get(result.lastInsertRowid);
+    try { rebuildRagIndex(); } catch {}
     res.status(201).json({ message: '创建成功', faq });
   } catch (err) {
     console.error('创建 FAQ 失败:', err);
@@ -575,6 +601,7 @@ app.put('/api/admin/faqs/:id', verifyAdminToken, requireAdmin, (req, res) => {
     );
 
     const faq = db.prepare('SELECT * FROM faqs WHERE id = ?').get(req.params.id);
+    try { rebuildRagIndex(); } catch {}
     res.json({ message: '更新成功', faq });
   } catch (err) {
     console.error('更新 FAQ 失败:', err);
@@ -593,6 +620,7 @@ app.delete('/api/admin/faqs/:id', verifyAdminToken, requireAdmin, (req, res) => 
     }
 
     db.prepare('DELETE FROM faqs WHERE id = ?').run(req.params.id);
+    try { rebuildRagIndex(); } catch {}
     res.json({ message: '删除成功' });
   } catch (err) {
     console.error('删除 FAQ 失败:', err);
@@ -979,6 +1007,7 @@ app.post('/api/admin/users/import', verifyAdminToken, requireAdmin, uploadCSV.si
       const vals = lines[i].split(',').map(v => v.trim().replace(/^"|"$/g, ''));
       const phone = vals[phoneIdx];
       if (!phone) { skipped++; continue; }
+      if (!/^1\d{10}$/.test(phone)) { errors.push(`第${i+1}行: 手机号格式不正确 (${phone})`); continue; }
 
       try {
         const nickname = nickIdx >= 0 ? vals[nickIdx] || '' : '';
@@ -1005,7 +1034,7 @@ app.post('/api/admin/users/import', verifyAdminToken, requireAdmin, uploadCSV.si
         } else {
           // 新增（默认密码为手机号后6位）
           const password = pwdIdx >= 0 ? vals[pwdIdx] : phone.slice(-6);
-          const hashed = bcrypt.hashSync(password, 10);
+          const hashed = await bcrypt.hash(password, 10);
           db.prepare('INSERT INTO users (phone, password, nickname, vip, customer_level_id) VALUES (?, ?, ?, ?, ?)')
             .run(phone, hashed, nickname, vip, levelId);
         }
@@ -1056,6 +1085,12 @@ app.get('/api/admin/stats', verifyAdminToken, requireAdmin, (req, res) => {
 //  AI 客服路由 /api/ai
 // ============================================================
 
+// 队列状态（管理员）
+app.get('/api/admin/queue/status', verifyAdminToken, requireAdmin, (req, res) => {
+  const status = aiQueue.getStatus();
+  res.json(status);
+});
+
 // 创建对话
 app.post('/api/ai/conversations', (req, res) => {
   try {
@@ -1076,7 +1111,7 @@ app.post('/api/ai/conversations', (req, res) => {
   }
 });
 
-// 发送消息 & 获取 AI 回复
+// 发送消息 & 获取 AI 回复（通过请求队列控制并发）
 app.post('/api/ai/chat', async (req, res) => {
   try {
     const { conversation_id, message, image_url } = req.body;
@@ -1093,8 +1128,14 @@ app.post('/api/ai/chat', async (req, res) => {
     // 获取对话历史
     const history = db.prepare('SELECT role, content FROM ai_messages WHERE conversation_id = ? ORDER BY id').all(conversation_id);
 
-    // 调用 AI
-    const reply = await aiChat(history.slice(0, -1), message, image_url);
+    // 通过队列调用 AI（控制并发）
+    const queueStatus = aiQueue.getStatus();
+    const queuePosition = queueStatus.queued;
+
+    const { result: reply, waitMs, processMs } = await aiQueue.enqueue(
+      () => aiChat(history.slice(0, -1), message, image_url),
+      { priority: conv.user_id ? 5 : 10 }  // 登录用户优先级略高
+    );
 
     // 保存 AI 回复
     const replyResult = db.prepare('INSERT INTO ai_messages (conversation_id, role, content) VALUES (?, ?, ?)').run(conversation_id, 'assistant', reply);
@@ -1102,10 +1143,15 @@ app.post('/api/ai/chat', async (req, res) => {
     // 更新对话时间
     db.prepare('UPDATE ai_conversations SET updated_at = datetime(\'now\',\'localtime\') WHERE id = ?').run(conversation_id);
 
-    res.json({ reply, message_id: replyResult.lastInsertRowid });
+    res.json({
+      reply,
+      message_id: replyResult.lastInsertRowid,
+      _queue: { waitMs, processMs, position: queuePosition },
+    });
   } catch (err) {
     console.error('AI 对话失败:', err);
-    res.status(500).json({ error: err.message || 'AI 回复失败' });
+    const statusCode = err.message.includes('超时') || err.message.includes('繁忙') ? 503 : 500;
+    res.status(statusCode).json({ error: err.message || 'AI 回复失败' });
   }
 });
 
@@ -1139,6 +1185,29 @@ app.get('/api/ai/conversations', (req, res) => {
 app.get('/api/ai/conversations/:id/messages', (req, res) => {
   try {
     const db = getDb();
+    // 验证权限：管理员可看所有，普通用户只能看自己的
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: '未登录' });
+    const token = authHeader.split(' ')[1];
+    let isAdmin = false;
+    let userId = null;
+    try {
+      const decoded = jwt.verify(token, ADMIN_JWT_SECRET);
+      isAdmin = true;
+    } catch {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        userId = decoded.id;
+      } catch {
+        return res.status(401).json({ error: '令牌无效' });
+      }
+    }
+    if (!isAdmin) {
+      const conv = db.prepare('SELECT user_id FROM ai_conversations WHERE id = ?').get(req.params.id);
+      if (!conv || (conv.user_id && conv.user_id !== userId)) {
+        return res.status(403).json({ error: '无权访问此对话' });
+      }
+    }
     const messages = db.prepare('SELECT * FROM ai_messages WHERE conversation_id = ? ORDER BY id').all(req.params.id);
     res.json({ messages });
   } catch (err) {
@@ -1146,7 +1215,7 @@ app.get('/api/ai/conversations/:id/messages', (req, res) => {
   }
 });
 
-// 消息评分
+// 消息评分 — 👍 自动沉淀优秀回答到知识库
 app.post('/api/ai/messages/:id/rate', (req, res) => {
   try {
     const { rating } = req.body; // 1 = 👍, -1 = 👎
@@ -1155,6 +1224,55 @@ app.post('/api/ai/messages/:id/rate', (req, res) => {
     }
     const db = getDb();
     db.prepare('UPDATE ai_messages SET rating = ? WHERE id = ?').run(rating, req.params.id);
+
+    // 👍 好评 → 自动保存到 ai_knowledge，让 AI 越来越聪明
+    if (rating === 1) {
+      try {
+        const msg = db.prepare('SELECT id, conversation_id, role, content FROM ai_messages WHERE id = ?').get(req.params.id);
+        if (msg && msg.role === 'assistant' && msg.content) {
+          // 找到这条回复对应的用户问题
+          const userMsg = db.prepare(
+            'SELECT content FROM ai_messages WHERE conversation_id = ? AND role = ? AND id < ? ORDER BY id DESC LIMIT 1'
+          ).get(msg.conversation_id, 'user', msg.id);
+
+          const question = userMsg?.content?.trim() || '';
+          const answer = msg.content.trim();
+
+          if (question && answer && answer.length > 10) {
+            const title = question.slice(0, 80);
+
+            // 智能去重：查找相似的已有条目
+            const similar = findSimilarLearned(question);
+
+            if (similar) {
+              // 相似问题已存在 → 追加新回答作为补充
+              const newAnswer = answer;
+              if (!similar.content.includes(newAnswer.slice(0, 50))) {
+                db.prepare("UPDATE ai_knowledge SET content = content || ?, updated_at = datetime('now','localtime') WHERE id = ?")
+                  .run('\n\n补充回答：' + newAnswer, similar.id);
+                try { rebuildRagIndex(); } catch {}
+                console.log('🧠 AI自学习: 追加回答到相似条目 "' + similar.title + '" (相似度:' + similar.score.toFixed(2) + ')');
+              }
+            } else {
+              // 全新问题 → 新建条目
+              db.prepare(
+                'INSERT INTO ai_knowledge (title, content, category, tags) VALUES (?, ?, ?, ?)'
+              ).run(
+                title,
+                '用户问题：' + question + '\n\n参考回答：' + answer,
+                '自动学习',
+                JSON.stringify(['auto_learned', '用户好评'])
+              );
+              try { rebuildRagIndex(); } catch {}
+              console.log('🧠 AI自学习: 保存优秀回答 "' + title + '"');
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('AI自学习保存失败:', e.message);
+      }
+    }
+
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: '评分失败' });
@@ -1203,6 +1321,35 @@ app.post('/api/ai/conversations/:id/transfer', verifyToken, (req, res) => {
   }
 });
 
+// 关闭对话
+app.post('/api/ai/conversations/:id/close', verifyAdminToken, requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const conv = db.prepare('SELECT id FROM ai_conversations WHERE id = ?').get(req.params.id);
+    if (!conv) return res.status(404).json({ error: '对话不存在' });
+    db.prepare("UPDATE ai_conversations SET status = 'closed', updated_at = datetime('now','localtime') WHERE id = ?").run(req.params.id);
+    res.json({ message: '对话已关闭' });
+  } catch (err) {
+    console.error('关闭对话失败:', err);
+    res.status(500).json({ error: '关闭失败' });
+  }
+});
+
+// 用户主动结束对话
+app.post('/api/ai/conversations/:id/end', (req, res) => {
+  try {
+    const db = getDb();
+    const conv = db.prepare('SELECT id, status FROM ai_conversations WHERE id = ?').get(req.params.id);
+    if (!conv) return res.status(404).json({ error: '对话不存在' });
+    if (conv.status === 'closed') return res.json({ message: '对话已结束' });
+    db.prepare("UPDATE ai_conversations SET status = 'closed', updated_at = datetime('now','localtime') WHERE id = ?").run(req.params.id);
+    res.json({ message: '对话已结束' });
+  } catch (err) {
+    console.error('结束对话失败:', err);
+    res.status(500).json({ error: '结束失败' });
+  }
+});
+
 // 管理员查看 AI 对话列表
 app.get('/api/admin/ai/conversations', verifyAdminToken, requireAdmin, (req, res) => {
   try {
@@ -1238,6 +1385,9 @@ app.post('/api/admin/ai/knowledge', verifyAdminToken, requireAdmin, (req, res) =
     const { title, content, category, tags } = req.body;
     if (!title || !content) return res.status(400).json({ error: '标题和内容必填' });
     const db = getDb();
+    // 检查重复
+    const existing = db.prepare('SELECT id FROM ai_knowledge WHERE title = ?').get(title);
+    if (existing) return res.status(409).json({ error: '已存在同名知识：' + title });
     const result = db.prepare('INSERT INTO ai_knowledge (title, content, category, tags) VALUES (?, ?, ?, ?)').run(title, content, category || '', JSON.stringify(tags || []));
     const item = db.prepare('SELECT * FROM ai_knowledge WHERE id = ?').get(result.lastInsertRowid);
     try { rebuildRagIndex(); } catch {}
@@ -1269,6 +1419,90 @@ app.delete('/api/admin/ai/knowledge/:id', verifyAdminToken, requireAdmin, (req, 
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: '删除知识库条目失败' });
+  }
+});
+
+// 文档导入 multer
+const docStorage = multer.diskStorage({
+  destination: path.join(__dirname, 'uploads'),
+  filename: (req, file, cb) => {
+    cb(null, 'doc_' + Date.now() + path.extname(file.originalname));
+  }
+});
+const uploadDoc = multer({
+  storage: docStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['.xlsx', '.xls', '.docx', '.csv', '.txt', '.md'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (allowed.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('不支持的文件格式，支持: ' + allowed.join(' ')));
+    }
+  }
+});
+
+// 预览文档（不入库，但提取图片保存到本地）
+app.post('/api/admin/ai/knowledge/preview', verifyAdminToken, requireAdmin, uploadDoc.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: '请上传文件' });
+    const uploadsDir = path.join(__dirname, 'uploads');
+    const baseUrl = '/uploads';
+    const items = await parseDocument(req.file.path, uploadsDir, baseUrl);
+    try { fs.unlinkSync(req.file.path); } catch {}
+    res.json({ items, count: items.length });
+  } catch (err) {
+    if (req.file) try { fs.unlinkSync(req.file.path); } catch {}
+    res.status(400).json({ error: err.message || '解析失败' });
+  }
+});
+
+// 下载导入模板
+app.get('/api/admin/ai/knowledge/template', verifyAdminToken, requireAdmin, (req, res) => {
+  const XLSX = require('xlsx');
+  const wb = XLSX.utils.book_new();
+  const data = [
+    ['标题', '内容', '分类'],
+    ['抖音养号第一步：完善资料', '注册后先完善个人资料：\n1. 上传清晰头像\n2. 昵称简洁好记\n3. 简介说明你是做什么的\n4. 绑定手机号', '养号技巧'],
+    ['抖音流量池机制', '抖音采用层级递进的流量池：\n- 初始池：200-500播放\n- 完播率>30%进入下一级\n- 逐级递增至百万级', '短视频运营'],
+    ['产品定价方案', '（在此填写您的产品定价信息）', '收费相关'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{ wch: 30 }, { wch: 60 }, { wch: 15 }];
+  XLSX.utils.book_append_sheet(wb, ws, '知识库模板');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="AI_knowledge_template.xlsx"; filename*=UTF-8\'\'AI%E7%9F%A5%E8%AF%86%E5%BA%93%E5%AF%BC%E5%85%A5%E6%A8%A1%E6%9D%BF.xlsx');
+  res.send(buf);
+});
+
+// 确认导入文档到知识库
+app.post('/api/admin/ai/knowledge/import', verifyAdminToken, requireAdmin, async (req, res) => {
+  try {
+    const { items } = req.body;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: '没有要导入的数据' });
+    }
+    const db = getDb();
+    const existingTitles = new Set(db.prepare('SELECT title FROM ai_knowledge').all().map(r => r.title));
+    const insert = db.prepare('INSERT INTO ai_knowledge (title, content, category) VALUES (?, ?, ?)');
+    let imported = 0;
+    let skipped = 0;
+    for (const item of items) {
+      if (!item.title && !item.content) continue;
+      const title = item.title || '未命名';
+      if (existingTitles.has(title)) { skipped++; continue; }
+      insert.run(title, item.content || '', item.category || '');
+      existingTitles.add(title);
+      imported++;
+    }
+    try { rebuildRagIndex(); } catch {}
+    const msg = skipped > 0 ? `成功导入 ${imported} 条知识，跳过 ${skipped} 条重复` : `成功导入 ${imported} 条知识`;
+    res.json({ message: msg, count: imported, skipped });
+  } catch (err) {
+    console.error('导入失败:', err);
+    res.status(500).json({ error: err.message || '导入失败' });
   }
 });
 
@@ -1522,6 +1756,58 @@ app.post('/api/upload/file', upload.single('file'), async (req, res) => {
   }
 });
 
+// 批量上传图片（一键上传本地图片）
+app.post('/api/admin/upload/images', verifyAdminToken, requireAdmin, upload.array('files', 50), async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: '请选择文件' });
+    }
+    const results = req.files.map(f => ({
+      url: '/uploads/' + f.filename,
+      filename: f.originalname,
+      size: f.size,
+    }));
+    res.json({ message: `成功上传 ${results.length} 张图片`, files: results });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: '上传失败' });
+  }
+});
+
+// 删除单张图片
+app.delete('/api/admin/upload/images/:filename', verifyAdminToken, requireAdmin, (req, res) => {
+  try {
+    const filePath = path.join(__dirname, 'uploads', req.params.filename);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: '文件不存在' });
+    // 防止路径穿越
+    if (!filePath.startsWith(path.join(__dirname, 'uploads'))) return res.status(400).json({ error: '非法路径' });
+    fs.unlinkSync(filePath);
+    res.json({ message: '删除成功' });
+  } catch (err) {
+    res.status(500).json({ error: '删除失败' });
+  }
+});
+
+// 获取已上传图片列表
+app.get('/api/admin/upload/images', verifyAdminToken, requireAdmin, (req, res) => {
+  try {
+    const uploadsDir = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(uploadsDir)) return res.json({ images: [] });
+    const allFiles = fs.readdirSync(uploadsDir);
+    const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
+    const files = allFiles
+      .filter(f => imageExts.includes(path.extname(f).toLowerCase()))
+      .map(f => {
+        const stat = fs.statSync(path.join(uploadsDir, f));
+        return { url: '/uploads/' + f, filename: f, size: stat.size };
+      });
+    res.json({ images: files, count: files.length });
+  } catch (err) {
+    console.error('获取图片列表失败:', err);
+    res.status(500).json({ error: '获取图片列表失败: ' + err.message });
+  }
+});
+
 // ============================================================
 //  客户身份分类管理 /api/admin/customer-levels  (需 admin)
 // ============================================================
@@ -1598,6 +1884,29 @@ app.delete('/api/admin/customer-levels/:id', verifyAdminToken, requireAdmin, (re
 });
 
 // ============================================================
+//  全局错误处理
+// ============================================================
+
+// 404
+app.use((req, res) => {
+  res.status(404).json({ error: '接口不存在' });
+});
+
+// 全局异常兜底（防止进程崩溃）
+app.use((err, req, res, next) => {
+  console.error('未捕获错误:', err);
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: '请求体过大' });
+  }
+  res.status(500).json({ error: '服务器内部错误' });
+});
+
+// 未捕获 Promise 异常 → 打日志但不崩溃
+process.on('unhandledRejection', (reason) => {
+  console.error('未处理的 Promise 异常:', reason);
+});
+
+// ============================================================
 //  启动服务
 // ============================================================
 
@@ -1609,4 +1918,33 @@ app.listen(PORT, () => {
   ║   Env: development              ║
   ╚══════════════════════════════════╝
   `);
+  // 启动时重建 RAG 索引（包含教程和FAQ）
+  try { rebuildRagIndex(); } catch (e) { console.warn('启动时 RAG 索引重建失败:', e.message); }
+
+  // 每 5 分钟自动关闭超过 30 分钟无新消息的对话
+  setInterval(() => {
+    try {
+      const db = getDb();
+      const result = db.prepare(
+        "UPDATE ai_conversations SET status = 'closed', updated_at = datetime('now','localtime') WHERE status = 'active' AND updated_at < datetime('now','localtime','-30 minutes')"
+      ).run();
+      if (result.changes > 0) {
+        console.log('🧹 自动关闭 ' + result.changes + ' 个超时对话');
+      }
+    } catch (e) { console.warn('自动关闭对话失败:', e.message); }
+  }, 5 * 60 * 1000);
+
+  // 每天凌晨 3 点清理自动学习知识库（合并相似、淘汰超限）
+  setInterval(() => {
+    const now = new Date();
+    if (now.getHours() === 3 && now.getMinutes() < 5) {
+      try {
+        const result = cleanupLearned(200);
+        if (result.merged > 0 || result.removed > 0) {
+          rebuildRagIndex();
+          console.log('🧠 自动学习清理: 合并 ' + result.merged + ' 条, 淘汰 ' + result.removed + ' 条');
+        }
+      } catch (e) { console.warn('自动学习清理失败:', e.message); }
+    }
+  }, 5 * 60 * 1000);
 });

@@ -33,6 +33,12 @@ interface Category {
 }
 
 const categoryColors: Record<string, string> = {
+  '使用入门': '#8b5cf6',
+  'AI获客': '#00d4ff',
+  'AI销售': '#10b981',
+  '产品功能': '#f59e0b',
+  '养号攻略': '#ef4444',
+  '常见问题': '#6366f1',
   '抖音': '#ff4444',
   '快手': '#ff6b35',
   '小红书': '#ff2442',
@@ -46,6 +52,11 @@ const iconSvgs: Record<string, React.ReactNode> = {
   book: <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>,
   'message-circle': <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>,
   'help-circle': <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+  rocket: <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 00-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 012-3.95A12.88 12.88 0 0122 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 01-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>,
+  zap: <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
+  'trending-up': <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>,
+  box: <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0022 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>,
+  shield: <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
 };
 
 export default function Home() {
@@ -67,7 +78,7 @@ export default function Home() {
       setFaqs((faqRes.faqs || []).slice(0, 6));
       // 从教程中提取有数据的分类
       const catMap = new Map<string, { name: string; icon: string }>();
-      const iconMap: Record<string, string> = { '抖音': 'music', '快手': 'video', '小红书': 'book', '微信': 'message-circle' };
+      const iconMap: Record<string, string> = { '使用入门': 'rocket', 'AI获客': 'zap', 'AI销售': 'trending-up', '产品功能': 'box', '养号攻略': 'shield', '常见问题': 'help-circle', '抖音': 'music', '快手': 'video', '小红书': 'book', '微信': 'message-circle' };
       allTutorials.forEach(t => {
         if (!catMap.has(t.category)) {
           catMap.set(t.category, { name: t.category, icon: iconMap[t.category] || 'help-circle' });

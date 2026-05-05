@@ -30,6 +30,10 @@ function verifyAdminToken(req, res, next) {
   const token = authHeader.split(' ')[1];
   try {
     const decoded = jwt.verify(token, ADMIN_JWT_SECRET);
+    // 验证管理员是否仍然存在
+    const { getDb } = require('../database/schema');
+    const admin = getDb().prepare('SELECT id FROM admins WHERE id = ?').get(decoded.id);
+    if (!admin) return res.status(401).json({ error: '管理员账号已失效' });
     req.admin = decoded;
     next();
   } catch (err) {

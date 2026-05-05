@@ -46,11 +46,11 @@ export default function TutorialDetailPage() {
         <main className="min-h-screen">
           <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6">
             <div className="animate-pulse space-y-4">
-              <div className="h-6 w-20 rounded bg-[#1e293b]" />
-              <div className="h-10 w-3/4 rounded bg-[#1e293b]" />
-              <div className="h-4 w-40 rounded bg-[#1e293b]" />
+              <div className="h-6 w-20 rounded bg-[#e2e8f0]" />
+              <div className="h-10 w-3/4 rounded bg-[#e2e8f0]" />
+              <div className="h-4 w-40 rounded bg-[#e2e8f0]" />
               <div className="mt-8 space-y-3">
-                {[1,2,3,4,5,6,7,8].map(i => <div key={i} className="h-4 w-full rounded bg-[#1e293b]" />)}
+                {[1,2,3,4,5,6,7,8].map(i => <div key={i} className="h-4 w-full rounded bg-[#e2e8f0]" />)}
               </div>
             </div>
           </div>
@@ -156,11 +156,11 @@ export default function TutorialDetailPage() {
           {/* 底部 CTA */}
           <div className="mt-16 rounded-xl border border-[#e2e8f0] bg-white p-8 text-center">
             <h3 className="text-lg font-semibold">还没解决你的问题？</h3>
-            <p className="mt-1 text-sm text-[#94a3b8]">提交工单，我们的技术支持团队会尽快为你解答</p>
-            <Link href="/ticket" className="btn btn-primary mt-4">
-              提交工单
+            <p className="mt-1 text-sm text-[#94a3b8]">问问 iami 小助手，它能帮你快速解答</p>
+            <Link href="/support" className="btn btn-primary mt-4">
+              咨询小助手
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
             </Link>
           </div>

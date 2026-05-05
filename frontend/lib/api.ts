@@ -25,9 +25,13 @@ async function fetchAPI(endpoint: string, options: RequestInit = {}) {
     headers,
   });
 
-  // 304 Not Modified — 多数是 auth/me 被缓存，需要忽略
+  // 304 Not Modified — 缓存命中，重新请求一次
   if (res.status === 304) {
-    throw new Error('登录状态已过期，请重新登录');
+    const retryRes = await fetch(`${BASE_URL}${endpoint}`, {
+      ...options,
+      headers: { ...headers, 'Cache-Control': 'no-cache' },
+    });
+    if (retryRes.ok) return retryRes.json();
   }
 
   let data;
@@ -60,9 +64,13 @@ async function fetchAdminAPI(endpoint: string, options: RequestInit = {}) {
     headers,
   });
 
-  // 304 Not Modified
+  // 304 Not Modified — 缓存命中，重新请求一次
   if (res.status === 304) {
-    throw new Error('登录状态已过期，请重新登录');
+    const retryRes = await fetch(`${BASE_URL}${endpoint}`, {
+      ...options,
+      headers: { ...headers, 'Cache-Control': 'no-cache' },
+    });
+    if (retryRes.ok) return retryRes.json();
   }
 
   let data;
@@ -138,6 +146,7 @@ export const adminApi = {
     cover?: string;
     tags?: string;
     status?: string;
+    vip_only?: boolean | number;
   }) =>
     fetchAdminAPI('/admin/tutorials', {
       method: 'POST',
@@ -151,6 +160,7 @@ export const adminApi = {
     cover?: string;
     tags?: string;
     status?: string;
+    vip_only?: boolean | number;
   }) =>
     fetchAdminAPI(`/admin/tutorials/${id}`, {
       method: 'PUT',
@@ -357,6 +367,10 @@ export const aiApi = {
       method: 'POST',
       body: JSON.stringify(data || {}),
     }),
+  endConversation: (conversationId: number) =>
+    fetchAPI(`/ai/conversations/${conversationId}/end`, {
+      method: 'POST',
+    }),
 };
 
 // ========== AI 管理 ==========
@@ -375,6 +389,49 @@ export const aiAdminApi = {
     }),
   deleteKnowledge: (id: number) =>
     fetchAdminAPI(`/admin/ai/knowledge/${id}`, { method: 'DELETE' }),
+  importKnowledge: async (items: { title: string; content: string; category?: string }[]) => {
+    const token = getAdminToken();
+    const res = await fetch('/api/admin/ai/knowledge/import', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ items }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '导入失败');
+    return data;
+  },
+  previewKnowledge: async (file: File) => {
+    const token = getAdminToken();
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch('/api/admin/ai/knowledge/preview', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '解析失败');
+    return data as { items: { title: string; content: string; category: string }[]; count: number };
+  },
+  // 批量上传图片
+  uploadImages: async (files: File[]) => {
+    const token = getAdminToken();
+    const formData = new FormData();
+    files.forEach(f => formData.append('files', f));
+    const res = await fetch('/api/admin/upload/images', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '上传失败');
+    return data as { message: string; files: { url: string; filename: string; size: number }[] };
+  },
+  // 获取已上传图片列表
+  getImages: () => fetchAdminAPI('/admin/upload/images'),
 };
 
 // ========== 分类 ==========

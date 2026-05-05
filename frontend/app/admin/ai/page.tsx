@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { aiAdminApi } from '@/lib/api';
 import { showToast } from '@/components/ui/Toast';
+import Pagination from '@/components/ui/Pagination';
 
 interface KnowledgeItem {
   id: number;
@@ -15,7 +16,7 @@ interface KnowledgeItem {
   updated_at: string;
 }
 
-const defaultCategories = ['养号技巧', '获客方法', '短视频运营', '平台规则', '产品功能', '收费相关', '常见问题'];
+const defaultCategories = ['自动学习', '养号技巧', '获客方法', '短视频运营', '平台规则', '产品功能', '常见问题'];
 
 export default function KnowledgePage() {
   const [items, setItems] = useState<KnowledgeItem[]>([]);
@@ -24,9 +25,25 @@ export default function KnowledgePage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState({ title: '', content: '', category: '' });
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [previewItems, setPreviewItems] = useState<{ title: string; content: string; category: string }[] | null>(null);
+  const [previewFileName, setPreviewFileName] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 素材库
+  const [showImages, setShowImages] = useState(false);
+  const [imageList, setImageList] = useState<{ url: string; filename: string; size: number }[]>([]);
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const [imgSearch, setImgSearch] = useState('');
+  const [imgPage, setImgPage] = useState(1);
+  const [selectedImages, setSelectedImages] = useState<Set<string>>(new Set());
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const imgInputRef = useRef<HTMLInputElement>(null);
+  const imgPageSize = 12;
   const [filterCategory, setFilterCategory] = useState('');
   const [search, setSearch] = useState('');
-  const [importing, setImporting] = useState(false);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
   const fetchItems = () => {
     setLoading(true);
@@ -50,6 +67,131 @@ export default function KnowledgePage() {
     }
     return true;
   });
+  const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+  // 加载图片列表
+  const loadImages = async () => {
+    try {
+      const token = localStorage.getItem('imai-admin-token');
+      const res = await fetch('/api/admin/upload/images', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json();
+      setImageList(data.images || []);
+      setImgPage(1);
+      setSelectedImages(new Set());
+      setImgSearch('');
+    } catch {}
+  };
+
+  // 删除图片
+  const handleDeleteImages = async (filenames: string[]) => {
+    if (!confirm(`确定删除 ${filenames.length} 张图片？`)) return;
+    try {
+      const token = localStorage.getItem('imai-admin-token');
+      for (const filename of filenames) {
+        await fetch(`/api/admin/upload/images/${encodeURIComponent(filename)}`, {
+          method: 'DELETE',
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+      }
+      showToast(`已删除 ${filenames.length} 张图片`, 'success');
+      setSelectedImages(new Set());
+      loadImages();
+    } catch {
+      showToast('删除失败', 'error');
+    }
+  };
+
+  // 图片筛选+分页
+  const filteredImages = imageList.filter(img =>
+    !imgSearch || img.filename.toLowerCase().includes(imgSearch.toLowerCase())
+  );
+  const imgTotalPages = Math.ceil(filteredImages.length / imgPageSize) || 1;
+  const pagedImages = filteredImages.slice((imgPage - 1) * imgPageSize, imgPage * imgPageSize);
+
+  // 切换选中
+  const toggleSelectImage = (url: string) => {
+    setSelectedImages(prev => {
+      const next = new Set(prev);
+      next.has(url) ? next.delete(url) : next.add(url);
+      return next;
+    });
+  };
+
+  // 上传图片
+  const handleUploadImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploadingImages(true);
+    try {
+      const token = localStorage.getItem('imai-admin-token');
+      const formData = new FormData();
+      Array.from(files).forEach(f => formData.append('files', f));
+      const res = await fetch('/api/admin/upload/images', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(data.message || '上传成功', 'success');
+        loadImages();
+      } else {
+        showToast(data.error || '上传失败', 'error');
+      }
+    } catch {
+      showToast('上传失败', 'error');
+    } finally {
+      setUploadingImages(false);
+      if (imgInputRef.current) imgInputRef.current.value = '';
+    }
+  };
+
+  // 文档导入：先预览
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    try {
+      const res = await aiAdminApi.previewKnowledge(file);
+      if (res.items.length === 0) {
+        showToast('文档中没有解析到有效内容', 'error');
+      } else {
+        setPreviewItems(res.items);
+        setPreviewFileName(file.name);
+      }
+    } catch (err: any) {
+      showToast(err.message || '解析失败', 'error');
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // 确认导入
+  const confirmImport = async () => {
+    if (!previewItems) return;
+    setImporting(true);
+    try {
+      const res = await aiAdminApi.importKnowledge(previewItems);
+      showToast(res.message || '导入成功', 'success');
+      setPreviewItems(null);
+      fetchItems();
+    } catch (err: any) {
+      showToast(err.message || '导入失败', 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  // 下载模板
+  const downloadTemplate = () => {
+    const a = document.createElement('a');
+    a.href = '/api/admin/ai/knowledge/template';
+    a.download = 'AI知识库导入模板.xlsx';
+    a.click();
+  };
 
   const openCreate = () => {
     setEditingId(null);
@@ -106,29 +248,6 @@ export default function KnowledgePage() {
     } catch {}
   };
 
-  // 快速导入预置知识
-  const handleQuickImport = async () => {
-    setImporting(true);
-    const presetKnowledge = [
-      { title: '抖音养号基本流程', content: '1. 注册后先不发内容，先刷3-5天视频\n2. 每天活跃30分钟以上，点赞、评论、关注同行\n3. 完善个人资料：头像、昵称、简介要垂直\n4. 第6天开始发内容，每天1-2条\n5. 发布后积极回复评论，增加互动率', category: '养号技巧' },
-      { title: '抖音流量池机制', content: '抖音采用层级递进的流量池机制：\n- 初始池：200-500播放量\n- 若完播率>30%、点赞率>3%，进入下一级\n- 第二级：1000-5000播放\n- 第三级：1万-10万播放\n- 爆款池：100万+播放\n\n关键指标：完播率 > 点赞率 > 评论率 > 转发率', category: '短视频运营' },
-      { title: '小红书账号定位方法', content: '三步定位法：\n1. 找到你擅长的领域（技能/经验/兴趣）\n2. 分析目标用户画像（年龄/需求/痛点）\n3. 确定内容形式（图文/视频/混剪）\n\n关键：账号垂直度越高，推荐越精准', category: '短视频运营' },
-      { title: '获客系统使用指南', content: 'imai.work AI 获客系统核心功能：\n1. 智能客服：24小时自动回复客户咨询\n2. 工单管理：客户问题统一收集处理\n3. 知识库：AI 基于专业知识自动回答\n4. 数据分析：客户行为追踪和分析\n\n使用流程：注册 → 配置AI → 导入知识 → 接入渠道', category: '产品功能' },
-      { title: '微信养号防封攻略', content: '新号养号要点：\n1. 注册后绑定手机号，实名认证\n2. 每天正常聊天、刷朋友圈\n3. 不要频繁加人（每天不超过5人）\n4. 不发广告、不群发\n5. 养号15天后再开始正常使用\n6. 避免使用多开、模拟器', category: '养号技巧' },
-    ];
-    try {
-      for (const item of presetKnowledge) {
-        await aiAdminApi.createKnowledge(item);
-      }
-      showToast(`已导入 ${presetKnowledge.length} 条知识`, 'success');
-      fetchItems();
-    } catch (err: any) {
-      showToast('导入失败: ' + err.message, 'error');
-    } finally {
-      setImporting(false);
-    }
-  };
-
   return (
     <div className="space-y-6">
       {/* 顶部 */}
@@ -138,14 +257,31 @@ export default function KnowledgePage() {
           <p className="text-xs text-[#94a3b8]">管理 AI 客服的专业知识，AI 回答时会自动参考</p>
         </div>
         <div className="flex gap-2">
-          {items.length === 0 && (
-            <button onClick={handleQuickImport} disabled={importing} className="btn btn-secondary btn-sm">
-              {importing ? '导入中...' : '📥 导入预置知识'}
-            </button>
-          )}
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.docx,.csv,.txt,.md" onChange={handleImport} className="hidden" />
+          <button onClick={downloadTemplate} className="btn btn-secondary btn-sm">
+            📋 下载模板
+          </button>
+          <button onClick={() => fileInputRef.current?.click()} disabled={importing} className="btn btn-secondary btn-sm">
+            {importing ? '解析中...' : '📄 导入文档'}
+          </button>
+          <input ref={imgInputRef} type="file" accept="image/*" multiple onChange={handleUploadImages} className="hidden" />
+          <button onClick={() => { setShowImages(true); loadImages(); }} className="btn btn-secondary btn-sm">🖼️ 图片管理</button>
           <button onClick={openCreate} className="btn btn-primary btn-sm">+ 添加知识</button>
         </div>
       </div>
+
+      {/* 自动学习统计 */}
+      {items.some(i => i.category === '自动学习') && (
+        <div className="rounded-lg border border-[#8b5cf6]/20 bg-[#f5f3ff] p-3 flex items-center gap-3">
+          <span className="text-lg">🧠</span>
+          <div className="text-sm">
+            <span className="font-medium text-[#6d28d9]">AI 自学习</span>
+            <span className="text-[#7c3aed]"> 已积累 {items.filter(i => i.category === '自动学习').length} 条优秀回答</span>
+            <span className="text-[#94a3b8]"> · 用户点👍的内容会自动保存到这里</span>
+          </div>
+          <button onClick={() => setFilterCategory('自动学习')} className="ml-auto text-xs font-medium text-[#8b5cf6] hover:underline">查看全部 →</button>
+        </div>
+      )}
 
       {/* 筛选栏 */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -187,11 +323,10 @@ export default function KnowledgePage() {
             <svg className="mx-auto h-12 w-12 text-[#cbd5e1]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
             <p className="mt-3 text-sm text-[#94a3b8]">知识库为空</p>
             <p className="mt-1 text-xs text-[#94a3b8]">添加知识后，AI 回答时会自动参考这些内容</p>
-            <button onClick={handleQuickImport} disabled={importing} className="btn btn-primary btn-sm mt-4">
-              {importing ? '导入中...' : '📥 导入预置知识（5条）'}
-            </button>
+            <p className="mt-1 text-xs text-[#94a3b8]">点击「📄 导入文档」批量导入，或「+ 添加知识」手动创建</p>
           </div>
         ) : (
+          <>
           <table className="w-full whitespace-nowrap">
             <thead>
               <tr>
@@ -204,11 +339,14 @@ export default function KnowledgePage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(item => (
+              {paged.map(item => (
                 <tr key={item.id} className="group">
                   <td className="text-xs font-mono text-[#94a3b8]">{item.id}</td>
                   <td className="font-medium text-[#1e293b] max-w-[200px] truncate">{item.title}</td>
-                  <td><span className="tag">{item.category || '未分类'}</span></td>
+                  <td>
+                    <span className="tag">{item.category || '未分类'}</span>
+                    {item.category === '自动学习' && <span className="ml-1 text-[10px]">🧠</span>}
+                  </td>
                   <td className="text-xs text-[#64748b] max-w-[300px] truncate">{item.content.slice(0, 80)}</td>
                   <td>
                     <button onClick={() => handleToggleStatus(item)} className={`text-xs font-medium px-2 py-0.5 rounded-full ${item.status === 'active' ? 'bg-[#ecfdf5] text-[#059669]' : 'bg-[#f1f5f9] text-[#94a3b8]'}`}>
@@ -225,6 +363,8 @@ export default function KnowledgePage() {
               ))}
             </tbody>
           </table>
+          <Pagination page={page} total={filtered.length} pageSize={pageSize} onChange={setPage} />
+          </>
         )}
       </div>
 
@@ -259,6 +399,176 @@ export default function KnowledgePage() {
             <div className="flex gap-2 pt-5">
               <button onClick={() => setShowEditor(false)} className="flex-1 btn btn-secondary btn-sm justify-center">取消</button>
               <button onClick={handleSave} disabled={saving} className="flex-1 btn btn-primary btn-sm justify-center">{saving ? '保存中...' : '保存'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 导入预览弹窗 */}
+      {previewItems && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setPreviewItems(null)}>
+          <div className="card w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-base font-semibold text-[#1e293b]">导入预览</h3>
+                <p className="text-xs text-[#94a3b8] mt-1">文件：{previewFileName} · 共 {previewItems.length} 条</p>
+              </div>
+              <button onClick={() => setPreviewItems(null)} className="p-1 rounded hover:bg-[#f1f5f9] text-[#94a3b8]">
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+
+            {/* 格式说明 */}
+            <div className="rounded-lg bg-[#f0f9ff] border border-[#bae6fd] p-3 mb-4 text-xs text-[#0369a1]">
+              <p className="font-medium mb-1">📄 支持的文档格式：</p>
+              <p><b>Excel</b>（.xlsx）：第一行表头，需包含「标题」「内容」列，可选「分类」列</p>
+              <p><b>Word</b>（.docx）：按标题（H1/H2）自动分段，每段标题即知识标题</p>
+              <p><b>CSV/TXT</b>：每行一条，或按空行分段（第一行为标题）</p>
+              <p className="mt-1 text-[#0284c7]">💡 不确定格式？先点「📋 下载模板」查看示例</p>
+            </div>
+
+            {/* 预览列表（最多显示50条） */}
+            <div className="flex-1 overflow-y-auto space-y-2 mb-4">
+              {previewItems.slice(0, 50).map((item, i) => (
+                <div key={i} className="rounded-lg border border-[#e2e8f0] p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[10px] font-mono text-[#94a3b8] bg-[#f1f5f9] px-1.5 py-0.5 rounded">#{i + 1}</span>
+                    <span className="text-sm font-medium text-[#1e293b] truncate">{item.title}</span>
+                    {item.category && <span className="tag text-[10px]">{item.category}</span>}
+                  </div>
+                  <p className="text-xs text-[#64748b] line-clamp-2 whitespace-pre-wrap">{item.content.slice(0, 200)}{item.content.length > 200 ? '...' : ''}</p>
+                </div>
+              ))}
+              {previewItems.length > 50 && (
+                <div className="text-center text-xs text-[#94a3b8] py-2">还有 {previewItems.length - 50} 条未显示...</div>
+              )}
+            </div>
+
+            {/* 操作按钮 */}
+            <div className="flex gap-2 pt-3 border-t border-[#e2e8f0]">
+              <button onClick={() => setPreviewItems(null)} className="flex-1 btn btn-secondary btn-sm justify-center">取消</button>
+              <button onClick={confirmImport} disabled={importing} className="flex-1 btn btn-primary btn-sm justify-center">
+                {importing ? '导入中...' : `确认导入 ${previewItems.length} 条`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 素材库弹窗 */}
+      {showImages && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setShowImages(false)}>
+          <div className="card w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* 标题栏 */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <h3 className="text-base font-semibold text-[#1e293b]">素材库</h3>
+                <span className="text-xs text-[#94a3b8] bg-[#f1f5f9] px-2 py-0.5 rounded-full">{imageList.length} 张</span>
+              </div>
+              <button onClick={() => setShowImages(false)} className="p-1 rounded hover:bg-[#f1f5f9] text-[#94a3b8]">
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+
+            {/* 工具栏 */}
+            <div className="flex items-center gap-2 mb-4">
+              <button onClick={() => imgInputRef.current?.click()} disabled={uploadingImages} className="btn btn-primary btn-sm">
+                {uploadingImages ? '上传中...' : '📤 上传图片'}
+              </button>
+              {selectedImages.size > 0 && (
+                <>
+                  <button onClick={() => {
+                    const md = Array.from(selectedImages).map(url => `![](${url})`).join('\n');
+                    navigator.clipboard.writeText(md);
+                    showToast(`已复制 ${selectedImages.size} 条链接`, 'success');
+                  }} className="btn btn-secondary btn-sm">📋 复制选中</button>
+                  <button onClick={() => handleDeleteImages(imageList.filter(img => selectedImages.has(img.url)).map(img => img.filename))} className="btn btn-secondary btn-sm text-[#ef4444] hover:bg-[#fef2f2]">🗑️ 删除选中</button>
+                  <button onClick={() => setSelectedImages(new Set())} className="text-xs text-[#94a3b8] hover:text-[#64748b]">取消选择</button>
+                </>
+              )}
+              <div className="flex-1" />
+              <div className="relative">
+                <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#94a3b8]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input value={imgSearch} onChange={e => { setImgSearch(e.target.value); setImgPage(1); }} placeholder="搜索文件名" className="pl-8 pr-3 py-1.5 w-40 text-xs bg-white border border-[#e2e8f0] rounded-full outline-none focus:border-[#8b5cf6] transition-all" />
+              </div>
+            </div>
+
+            {/* 图片网格 */}
+            <div className="flex-1 overflow-y-auto min-h-0">
+              {filteredImages.length === 0 ? (
+                <div className="py-16 text-center">
+                  <svg className="mx-auto h-12 w-12 text-[#cbd5e1]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                  <p className="mt-3 text-sm text-[#94a3b8]">{imgSearch ? '没有匹配的图片' : '暂无素材，点击上传'}</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                  {pagedImages.map((img) => (
+                    <div key={img.url} className={`group relative rounded-lg border-2 overflow-hidden cursor-pointer transition-all ${selectedImages.has(img.url) ? 'border-[#8b5cf6] ring-1 ring-[#8b5cf6]/30' : 'border-[#e2e8f0] hover:border-[#cbd5e1]'}`}>
+                      {/* 选中复选框 */}
+                      <div className="absolute top-1.5 left-1.5 z-10" onClick={(e) => { e.stopPropagation(); toggleSelectImage(img.url); }}>
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${selectedImages.has(img.url) ? 'bg-[#8b5cf6] border-[#8b5cf6]' : 'bg-white/80 border-[#cbd5e1] group-hover:border-[#8b5cf6]'}`}>
+                          {selectedImages.has(img.url) && <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>}
+                        </div>
+                      </div>
+                      {/* 预览按钮 */}
+                      <button onClick={() => setPreviewImage(img.url)} className="absolute top-1.5 right-1.5 z-10 opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 rounded p-0.5">
+                        <svg className="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      </button>
+                      {/* 图片 */}
+                      <img src={img.url} alt={img.filename} className="w-full h-24 object-cover" onClick={() => setPreviewImage(img.url)} />
+                      {/* 信息栏 */}
+                      <div className="px-2 py-1.5 bg-white">
+                        <p className="text-[10px] text-[#64748b] truncate">{img.filename}</p>
+                        <div className="flex items-center justify-between mt-0.5">
+                          <span className="text-[9px] text-[#94a3b8]">{(img.size / 1024).toFixed(0)}KB</span>
+                          <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(`![](${img.url})`); showToast('已复制', 'success'); }} className="text-[10px] text-[#8b5cf6] hover:underline">复制链接</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 分页 + 全选 */}
+            {filteredImages.length > 0 && (
+              <div className="flex items-center justify-between pt-3 mt-3 border-t border-[#e2e8f0]">
+                <div className="flex items-center gap-2">
+                  <button onClick={() => {
+                    const allOnPage = pagedImages.map(i => i.url);
+                    setSelectedImages(prev => {
+                      const next = new Set(prev);
+                      const allSelected = allOnPage.every(u => next.has(u));
+                      if (allSelected) { allOnPage.forEach(u => next.delete(u)); } else { allOnPage.forEach(u => next.add(u)); }
+                      return next;
+                    });
+                  }} className="text-xs text-[#64748b] hover:text-[#8b5cf6]">
+                    {pagedImages.every(i => selectedImages.has(i.url)) ? '取消全选' : '全选当页'}
+                  </button>
+                  {selectedImages.size > 0 && <span className="text-xs text-[#8b5cf6]">已选 {selectedImages.size} 张</span>}
+                </div>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => setImgPage(p => Math.max(1, p - 1))} disabled={imgPage <= 1} className="rounded px-2 py-1 text-xs text-[#64748b] hover:bg-[#f1f5f9] disabled:opacity-30">上一页</button>
+                  <span className="text-xs text-[#94a3b8] px-2">{imgPage} / {imgTotalPages}</span>
+                  <button onClick={() => setImgPage(p => Math.min(imgTotalPages, p + 1))} disabled={imgPage >= imgTotalPages} className="rounded px-2 py-1 text-xs text-[#64748b] hover:bg-[#f1f5f9] disabled:opacity-30">下一页</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 图片预览弹窗 */}
+      {previewImage && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={() => setPreviewImage(null)}>
+          <div className="relative max-w-[90vw] max-h-[90vh]">
+            <img src={previewImage} alt="预览" className="max-w-full max-h-[85vh] rounded-lg shadow-2xl" />
+            <button onClick={() => setPreviewImage(null)} className="absolute -top-2 -right-2 bg-white rounded-full p-1 shadow-lg">
+              <svg className="w-4 h-4 text-[#64748b]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+            <div className="absolute bottom-0 left-0 right-0 bg-black/60 rounded-b-lg px-4 py-2 flex items-center justify-between">
+              <span className="text-xs text-white/80 truncate">{previewImage.split('/').pop()}</span>
+              <button onClick={() => { navigator.clipboard.writeText(`![](${previewImage})`); showToast('已复制', 'success'); }} className="text-xs text-white hover:underline">复制链接</button>
             </div>
           </div>
         </div>

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { adminApi } from '@/lib/api';
 import { showToast } from '@/components/ui/Toast';
+import Pagination from '@/components/ui/Pagination';
 
 interface Ticket {
   id: number;
@@ -44,6 +45,8 @@ export default function AdminTicketsPage() {
   const [editStatus, setEditStatus] = useState('');
   const [replyText, setReplyText] = useState('');
   const [saving, setSaving] = useState(false);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
   const fetchTickets = (status?: string) => {
     setLoading(true);
@@ -53,7 +56,10 @@ export default function AdminTicketsPage() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchTickets(filterStatus); }, [filterStatus]);
+  useEffect(() => { fetchTickets(filterStatus); setPage(1); }, [filterStatus]);
+
+  // 分页
+  const pagedTickets = tickets.slice((page - 1) * pageSize, page * pageSize);
 
   const openDetail = (t: Ticket) => {
     setDetailTicket(t);
@@ -73,9 +79,15 @@ export default function AdminTicketsPage() {
         setSaving(false);
         return;
       }
-      await adminApi.updateTicket(detailTicket.id, payload);
+      const res = await adminApi.updateTicket(detailTicket.id, payload);
       showToast('保存成功', 'success');
-      setTickets(prev => prev.map(t => t.id === detailTicket.id ? { ...t, ...payload } : t));
+      // 用服务端返回的完整数据更新列表（包含处理人）
+      const updated = res.ticket;
+      if (updated) {
+        setTickets(prev => prev.map(t => t.id === detailTicket.id ? { ...t, ...updated } : t));
+      } else {
+        setTickets(prev => prev.map(t => t.id === detailTicket.id ? { ...t, ...payload } : t));
+      }
       setDetailTicket(null);
     } catch (err: any) {
       showToast(err.message || '保存失败', 'error');
@@ -147,6 +159,7 @@ export default function AdminTicketsPage() {
         ) : tickets.length === 0 ? (
           <div className="py-12 text-center text-[#94a3b8]">暂无工单</div>
         ) : (
+          <>
           <table className="w-full whitespace-nowrap">
             <thead>
               <tr>
@@ -161,7 +174,7 @@ export default function AdminTicketsPage() {
               </tr>
             </thead>
             <tbody>
-              {tickets.map(t => {
+              {pagedTickets.map(t => {
                 const sc = statusConfig[t.status] || statusConfig.pending;
                 return (
                 <tr key={t.id} className="group">
@@ -182,6 +195,8 @@ export default function AdminTicketsPage() {
               )})}
             </tbody>
           </table>
+          <Pagination page={page} total={tickets.length} pageSize={pageSize} onChange={setPage} />
+          </>
         )}
       </div>
     </div>

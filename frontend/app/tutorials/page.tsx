@@ -8,7 +8,7 @@ import Footer from '@/components/layout/Footer';
 import { tutorialApi } from '@/lib/api';
 
 // 分类列表由已加载教程动态生成，初始默认值
-const defaultCategories = ['全部', '抖音', '快手', '小红书', '微信', '其他'];
+const defaultCategories = ['全部', '使用入门', 'AI获客', 'AI销售', '产品功能', '养号攻略', '常见问题'];
 
 interface Tutorial {
   id: number;
@@ -64,7 +64,7 @@ function TutorialsContent() {
         <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
           <div className="mb-10 text-center">
             <h1 className="text-3xl font-bold">教程中心</h1>
-            <p className="mt-2 text-[#94a3b8]">抖音、快手、小红书、微信运营技巧全攻略</p>
+            <p className="mt-2 text-[#94a3b8]">AI获客系统使用教程与运营指南</p>
           </div>
 
           <form onSubmit={handleSearch} className="mx-auto mb-8 flex max-w-xl gap-2">

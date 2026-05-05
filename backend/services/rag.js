@@ -158,12 +158,12 @@ class VectorIndex {
 
   upsert(db, id, text) {
     const vector = this.textToVector(text);
-    const intId = Number(id);
-    if (isNaN(intId)) return;
+    const intId = Math.floor(Number(id));
+    if (isNaN(intId) || intId <= 0) return;
     // 先删除旧的
-    try { db.prepare('DELETE FROM knowledge_vec WHERE id = ?').run(intId); } catch {}
-    // 插入新的
-    db.prepare('INSERT INTO knowledge_vec (id, embedding) VALUES (?, ?)').run(intId, Buffer.from(vector.buffer));
+    try { db.prepare('DELETE FROM knowledge_vec WHERE id = ' + intId).run(); } catch {}
+    // 插入新的（sqlite-vec 要求主键必须是字面量整数，不能用参数绑定）
+    db.prepare('INSERT INTO knowledge_vec (id, embedding) VALUES (' + intId + ', ?)').run(Buffer.from(vector.buffer));
   }
 
   search(db, queryText, topK = 5) {
@@ -187,29 +187,68 @@ const vectorIndex = new VectorIndex();
 
 /**
  * 重建索引
+ * 同时索引 ai_knowledge、tutorials（已发布）、faqs（激活状态）
  */
 function rebuildIndex() {
   const db = getDb();
-  const items = db.prepare("SELECT id, title, content FROM ai_knowledge WHERE status = 'active'").all();
+
+  // 1. ai_knowledge 表
+  const knowledgeItems = db.prepare(
+    "SELECT id, title, content, category FROM ai_knowledge WHERE status = 'active'"
+  ).all().map(item => ({
+    ...item,
+    source: 'knowledge',
+  }));
+
+  // 2. tutorials 表（已发布教程）
+  const tutorialItems = db.prepare(
+    "SELECT id, title, content, category FROM tutorials WHERE status = 'published'"
+  ).all().map(item => ({
+    ...item,
+    // 教程 id 加偏移避免与 ai_knowledge 冲突
+    id: 100000 + item.id,
+    source: 'tutorial',
+  }));
+
+  // 3. faqs 表（激活状态）
+  const faqItems = db.prepare(
+    "SELECT id, question as title, answer as content, category FROM faqs WHERE status = 'active'"
+  ).all().map(item => ({
+    ...item,
+    id: 200000 + item.id,
+    source: 'faq',
+  }));
+
+  // 合并所有数据源
+  const allItems = [...knowledgeItems, ...tutorialItems, ...faqItems];
 
   // 重建 BM25
   bm25Index = new BM25Index();
-  bm25Index.build(items);
+  bm25Index.build(allItems);
 
   // 重建向量
   try {
     vectorIndex.initTable(db);
     // 清空旧数据
     try { db.prepare('DELETE FROM knowledge_vec').run(); } catch {}
-    for (const item of items) {
-      vectorIndex.upsert(db, item.id, item.title + ' ' + item.content);
+    let vecCount = 0;
+    for (const item of allItems) {
+      try {
+        vectorIndex.upsert(db, item.id, item.title + ' ' + item.content);
+        vecCount++;
+      } catch (e) {
+        // 单条失败不影响其他条目
+      }
+    }
+    if (vecCount < allItems.length) {
+      console.warn('向量索引: ' + (allItems.length - vecCount) + ' 条插入失败，已跳过');
     }
   } catch (e) {
     console.warn('向量索引初始化失败（不影响 BM25 检索）:', e.message);
   }
 
-  console.log(`RAG 索引已重建: ${items.length} 条知识`);
-  return items.length;
+  console.log(`RAG 索引已重建: ${allItems.length} 条 (知识库${knowledgeItems.length} + 教程${tutorialItems.length} + FAQ${faqItems.length})`);
+  return allItems.length;
 }
 
 /**
@@ -248,18 +287,140 @@ function retrieve(query, topK = 5) {
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);
 
-  // 获取知识条目详情
+  // 获取知识条目详情（根据 ID 范围区分数据源）
   if (sorted.length === 0) return [];
-  const placeholders = sorted.map(() => '?').join(',');
-  const items = db.prepare(`SELECT id, title, content, category FROM ai_knowledge WHERE id IN (${placeholders}) AND status = 'active'`)
-    .all(...sorted.map(s => s.id));
 
-  // 按分数排序
   const itemMap = {};
-  for (const item of items) itemMap[item.id] = item;
+
+  // 按 ID 范围分组查询
+  const knowledgeIds = sorted.filter(s => s.id < 100000).map(s => s.id);
+  const tutorialIds = sorted.filter(s => s.id >= 100000 && s.id < 200000).map(s => s.id - 100000);
+  const faqIds = sorted.filter(s => s.id >= 200000).map(s => s.id - 200000);
+
+  if (knowledgeIds.length > 0) {
+    const ph = knowledgeIds.map(() => '?').join(',');
+    const rows = db.prepare(`SELECT id, title, content, category FROM ai_knowledge WHERE id IN (${ph}) AND status = 'active'`).all(...knowledgeIds);
+    for (const r of rows) itemMap[r.id] = r;
+  }
+  if (tutorialIds.length > 0) {
+    const ph = tutorialIds.map(() => '?').join(',');
+    const rows = db.prepare(`SELECT id, title, content, category FROM tutorials WHERE id IN (${ph}) AND status = 'published'`).all(...tutorialIds);
+    for (const r of rows) itemMap[100000 + r.id] = r;
+  }
+  if (faqIds.length > 0) {
+    const ph = faqIds.map(() => '?').join(',');
+    const rows = db.prepare(`SELECT id, question as title, answer as content, category FROM faqs WHERE id IN (${ph}) AND status = 'active'`).all(...faqIds);
+    for (const r of rows) itemMap[200000 + r.id] = r;
+  }
+
   return sorted
     .filter(s => itemMap[s.id])
     .map(s => ({ ...itemMap[s.id], score: s.score }));
 }
 
-module.exports = { retrieve, rebuildIndex, tokenize };
+/**
+ * 计算两个文本的相似度（基于 token 重叠率）
+ * @returns {number} 0-1 之间的相似度
+ */
+function similarity(textA, textB) {
+  const tokensA = new Set(tokenize(textA));
+  const tokensB = new Set(tokenize(textB));
+  if (tokensA.size === 0 || tokensB.size === 0) return 0;
+  let overlap = 0;
+  for (const t of tokensA) {
+    if (tokensB.has(t)) overlap++;
+  }
+  // Jaccard 相似度
+  const union = new Set([...tokensA, ...tokensB]).size;
+  return union > 0 ? overlap / union : 0;
+}
+
+/**
+ * 查找与给定问题相似的已有自动学习条目
+ * @param {string} question - 用户问题
+ * @param {number} threshold - 相似度阈值（默认 0.35）
+ * @returns {object|null} 相似条目或 null
+ */
+function findSimilarLearned(question, threshold = 0.35) {
+  const db = getDb();
+  const existing = db.prepare(
+    "SELECT id, title, content FROM ai_knowledge WHERE category = '自动学习' AND status = 'active'"
+  ).all();
+
+  let bestMatch = null;
+  let bestScore = 0;
+
+  for (const item of existing) {
+    const score = similarity(question, item.title);
+    if (score > bestScore && score >= threshold) {
+      bestScore = score;
+      bestMatch = item;
+    }
+  }
+
+  return bestMatch ? { ...bestMatch, score: bestScore } : null;
+}
+
+/**
+ * 清理自动学习条目：合并相似内容，淘汰超限条目
+ * @param {number} maxCount - 最大保留条数（默认 200）
+ */
+function cleanupLearned(maxCount = 200) {
+  const db = getDb();
+  const items = db.prepare(
+    "SELECT id, title, content FROM ai_knowledge WHERE category = '自动学习' AND status = 'active' ORDER BY updated_at DESC"
+  ).all();
+
+  if (items.length === 0) return { merged: 0, removed: 0 };
+
+  let merged = 0;
+  const toDelete = new Set();
+
+  // 第一步：合并相似条目
+  for (let i = 0; i < items.length; i++) {
+    if (toDelete.has(items[i].id)) continue;
+    for (let j = i + 1; j < items.length; j++) {
+      if (toDelete.has(items[j].id)) continue;
+      const score = similarity(items[i].title, items[j].title);
+      if (score >= 0.4) {
+        // 把 j 的回答追加到 i，删除 j
+        const existingContent = items[i].content;
+        const newAnswer = items[j].content.replace(/^用户问题：.*?\n\n参考回答：/s, '');
+        if (newAnswer && !existingContent.includes(newAnswer.slice(0, 50))) {
+          db.prepare('UPDATE ai_knowledge SET content = content || ? WHERE id = ?')
+            .run('\n\n补充回答：' + newAnswer, items[i].id);
+        }
+        toDelete.add(items[j].id);
+        merged++;
+      }
+    }
+  }
+
+  // 批量删除被合并的条目
+  if (toDelete.size > 0) {
+    const placeholders = Array.from(toDelete).map(() => '?').join(',');
+    db.prepare(`DELETE FROM ai_knowledge WHERE id IN (${placeholders})`).run(...toDelete);
+  }
+
+  // 第二步：超限淘汰（删除最旧的）
+  let removed = 0;
+  const remaining = db.prepare(
+    "SELECT COUNT(*) as cnt FROM ai_knowledge WHERE category = '自动学习' AND status = 'active'"
+  ).get().cnt;
+
+  if (remaining > maxCount) {
+    const excess = remaining - maxCount;
+    const oldItems = db.prepare(
+      "SELECT id FROM ai_knowledge WHERE category = '自动学习' AND status = 'active' ORDER BY updated_at ASC LIMIT ?"
+    ).all(excess);
+    if (oldItems.length > 0) {
+      const placeholders = oldItems.map(() => '?').join(',');
+      db.prepare(`DELETE FROM ai_knowledge WHERE id IN (${placeholders})`).run(...oldItems.map(i => i.id));
+      removed = oldItems.length;
+    }
+  }
+
+  return { merged, removed };
+}
+
+module.exports = { retrieve, rebuildIndex, tokenize, similarity, findSimilarLearned, cleanupLearned };
