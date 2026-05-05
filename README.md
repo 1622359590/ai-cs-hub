@@ -582,8 +582,7 @@ docker-compose up -d --build
 
 ## 数据安全
 
-- `backend/data.db`（含 API Key、知识库）已加入 `.gitignore`
-- `百问百答.docx` 等私有文档不上传
+- 数据库、环境变量、上传文件等敏感数据均已加入 `.gitignore`
 - `.env.example` 仅提供配置模板，不含真实密钥
 - 前台/后台使用独立 JWT 密钥，登录状态完全隔离
 
