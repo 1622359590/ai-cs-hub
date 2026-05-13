@@ -10,9 +10,6 @@ services:
     volumes:
       - backend-data:/app/data
       - backend-uploads:/app/uploads
-    environment:
-      - JWT_SECRET=change-this-to-a-random-secret
-      - ADMIN_JWT_SECRET=change-this-to-another-random-secret
     restart: unless-stopped
 
   frontend:

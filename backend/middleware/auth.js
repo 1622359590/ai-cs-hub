@@ -5,7 +5,7 @@ const path = require('path');
 
 // ===== JWT 密钥管理 =====
 // 优先使用环境变量，其次从 .jwt-secrets 文件读取，最后随机生成并持久化
-const SECRETS_FILE = path.join(__dirname, '..', '.jwt-secrets');
+const SECRETS_FILE = path.join(__dirname, '..', 'data', '.jwt-secrets');
 
 function loadOrCreateSecrets() {
   // 1. 环境变量优先

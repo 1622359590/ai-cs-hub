@@ -61,6 +61,11 @@ app.use('/api', (req, res, next) => {
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// 根路径跳转到前端
+app.get('/', (req, res) => {
+  res.redirect('http://localhost:3000');
+});
+
 // ===== 文件上传配置 =====
 const storage = multer.diskStorage({
   destination: path.join(__dirname, 'uploads'),

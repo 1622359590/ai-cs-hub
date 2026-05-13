@@ -495,7 +495,21 @@ async function rebuildIndex(forceVectors = false) {
 
     const currentVecCount = db.prepare('SELECT COUNT(*) as cnt FROM knowledge_vec').get().cnt;
     if (!forceVectors && currentVecCount >= allItems.length) {
-      console.log(`向量索引已存在 (${currentVecCount} 条)，跳过重建`);
+      // 跳过向量重建，但仍需恢复内存映射（重启后 chunkMeta 为空）
+      vectorIdCounter = 0;
+      chunkMeta = {};
+      chunkIdToVectorId = {};
+      for (let i = 0; i < allItems.length; i++) {
+        const vecId = ++vectorIdCounter;
+        chunkMeta[vecId] = {
+          source: allItems[i].source,
+          parentId: allItems[i].parentId,
+          chunkIndex: allItems[i].chunkIndex,
+          chunkId: allItems[i].chunkId,
+        };
+        chunkIdToVectorId[allItems[i].chunkId] = vecId;
+      }
+      console.log(`向量索引已存在 (${currentVecCount} 条)，恢复内存映射`);
     } else {
       try { db.prepare('DELETE FROM knowledge_vec').run(); } catch {}
 
