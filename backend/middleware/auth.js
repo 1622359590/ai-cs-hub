@@ -1,7 +1,44 @@
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'imai-work-dev-key-2024';
-const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || 'imai-admin-secret-key-2024';
+// ===== JWT 密钥管理 =====
+// 优先使用环境变量，其次从 .jwt-secrets 文件读取，最后随机生成并持久化
+const SECRETS_FILE = path.join(__dirname, '..', '.jwt-secrets');
+
+function loadOrCreateSecrets() {
+  // 1. 环境变量优先
+  if (process.env.JWT_SECRET && process.env.ADMIN_JWT_SECRET) {
+    return { jwt: process.env.JWT_SECRET, admin: process.env.ADMIN_JWT_SECRET };
+  }
+
+  // 2. 尝试从文件读取
+  try {
+    const saved = JSON.parse(fs.readFileSync(SECRETS_FILE, 'utf-8'));
+    if (saved.jwt && saved.admin) {
+      return {
+        jwt: process.env.JWT_SECRET || saved.jwt,
+        admin: process.env.ADMIN_JWT_SECRET || saved.admin,
+      };
+    }
+  } catch {}
+
+  // 3. 随机生成并持久化
+  const secrets = {
+    jwt: process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex'),
+    admin: process.env.ADMIN_JWT_SECRET || crypto.randomBytes(32).toString('hex'),
+  };
+  try {
+    fs.writeFileSync(SECRETS_FILE, JSON.stringify(secrets, null, 2));
+    console.log('🔐 已生成新的 JWT 密钥并保存到', SECRETS_FILE);
+  } catch (e) {
+    console.warn('⚠️ 无法保存 JWT 密钥文件，重启后 token 将失效:', e.message);
+  }
+  return secrets;
+}
+
+const { jwt: JWT_SECRET, admin: ADMIN_JWT_SECRET } = loadOrCreateSecrets();
 
 // ===== 前台用户 JWT 验证 =====
 function verifyToken(req, res, next) {
@@ -13,6 +50,10 @@ function verifyToken(req, res, next) {
   const token = authHeader.split(' ')[1];
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
+    // 验证用户是否仍然存在
+    const { getDb } = require('../database/schema');
+    const user = getDb().prepare('SELECT id FROM users WHERE id = ?').get(decoded.id);
+    if (!user) return res.status(401).json({ error: '用户账号已失效' });
     req.user = decoded;
     next();
   } catch (err) {

@@ -14,7 +14,9 @@ const { createRecord: feishuCreateRecord } = require('./services/feishu');
 const { sendTicketNotification } = require('./services/notify');
 const { chat: aiChat, getAIConfig } = require('./services/ai');
 const { aiQueue } = require('./services/queue');
-const { rebuildIndex: rebuildRagIndex, findSimilarLearned, cleanupLearned } = require('./services/rag');
+const { rebuildIndex: rebuildRagIndex, findSimilarLearned: findSimilarLearnedRaw, cleanupLearned } = require('./services/rag');
+// 包装为 fire-and-forget 版本（CRUD 操作后异步重建索引，不阻塞响应）
+function rebuildRagAsync(force = true) { rebuildRagIndex(force).catch(e => console.warn('RAG 重建失败:', e.message)); }
 const { parseDocument } = require('./services/doc-parser');
 
 const app = express();
@@ -105,7 +107,7 @@ const uploadCSV = multer({
 });
 
 // 单个文件上传
-app.post('/api/upload', upload.single('file'), (req, res) => {
+app.post('/api/upload', verifyToken, upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: '请选择文件' });
   }
@@ -435,7 +437,7 @@ app.post('/api/admin/tutorials', verifyAdminToken, requireAdmin, (req, res) => {
     );
 
     const tutorial = db.prepare('SELECT * FROM tutorials WHERE id = ?').get(result.lastInsertRowid);
-    try { rebuildRagIndex(true); } catch {}
+    rebuildRagAsync()
     res.status(201).json({ message: '创建成功', tutorial });
   } catch (err) {
     console.error('创建教程失败:', err);
@@ -479,7 +481,7 @@ app.put('/api/admin/tutorials/:id', verifyAdminToken, requireAdmin, (req, res) =
     );
 
     const tutorial = db.prepare('SELECT * FROM tutorials WHERE id = ?').get(req.params.id);
-    try { rebuildRagIndex(true); } catch {}
+    rebuildRagAsync()
     res.json({ message: '更新成功', tutorial });
   } catch (err) {
     console.error('更新教程失败:', err);
@@ -498,7 +500,7 @@ app.delete('/api/admin/tutorials/:id', verifyAdminToken, requireAdmin, (req, res
     }
 
     db.prepare('DELETE FROM tutorials WHERE id = ?').run(req.params.id);
-    try { rebuildRagIndex(true); } catch {}
+    rebuildRagAsync()
     res.json({ message: '删除成功' });
   } catch (err) {
     console.error('删除教程失败:', err);
@@ -562,7 +564,7 @@ app.post('/api/admin/faqs', verifyAdminToken, requireAdmin, (req, res) => {
     );
 
     const faq = db.prepare('SELECT * FROM faqs WHERE id = ?').get(result.lastInsertRowid);
-    try { rebuildRagIndex(true); } catch {}
+    rebuildRagAsync()
     res.status(201).json({ message: '创建成功', faq });
   } catch (err) {
     console.error('创建 FAQ 失败:', err);
@@ -601,7 +603,7 @@ app.put('/api/admin/faqs/:id', verifyAdminToken, requireAdmin, (req, res) => {
     );
 
     const faq = db.prepare('SELECT * FROM faqs WHERE id = ?').get(req.params.id);
-    try { rebuildRagIndex(true); } catch {}
+    rebuildRagAsync()
     res.json({ message: '更新成功', faq });
   } catch (err) {
     console.error('更新 FAQ 失败:', err);
@@ -620,7 +622,7 @@ app.delete('/api/admin/faqs/:id', verifyAdminToken, requireAdmin, (req, res) => 
     }
 
     db.prepare('DELETE FROM faqs WHERE id = ?').run(req.params.id);
-    try { rebuildRagIndex(true); } catch {}
+    rebuildRagAsync()
     res.json({ message: '删除成功' });
   } catch (err) {
     console.error('删除 FAQ 失败:', err);
@@ -1216,61 +1218,63 @@ app.get('/api/ai/conversations/:id/messages', (req, res) => {
 });
 
 // 消息评分 — 👍 自动沉淀优秀回答到知识库
-app.post('/api/ai/messages/:id/rate', (req, res) => {
+app.post('/api/ai/messages/:id/rate', verifyToken, (req, res) => {
   try {
     const { rating } = req.body; // 1 = 👍, -1 = 👎
     if (rating !== 1 && rating !== -1 && rating !== 0) {
       return res.status(400).json({ error: 'rating 必须是 1, -1 或 0' });
     }
     const db = getDb();
+    // 验证消息所属对话属于当前用户
+    const msg = db.prepare(
+      'SELECT m.id, m.conversation_id, m.role, m.content FROM ai_messages m JOIN ai_conversations c ON m.conversation_id = c.id WHERE m.id = ? AND c.user_id = ?'
+    ).get(req.params.id, req.user.id);
+    if (!msg) return res.status(404).json({ error: '消息不存在或无权操作' });
+
     db.prepare('UPDATE ai_messages SET rating = ? WHERE id = ?').run(rating, req.params.id);
 
-    // 👍 好评 → 自动保存到 ai_knowledge，让 AI 越来越聪明
+    // 👍 好评 → 异步自学习（不阻塞响应）
     if (rating === 1) {
-      try {
-        const msg = db.prepare('SELECT id, conversation_id, role, content FROM ai_messages WHERE id = ?').get(req.params.id);
-        if (msg && msg.role === 'assistant' && msg.content) {
-          // 找到这条回复对应的用户问题
-          const userMsg = db.prepare(
-            'SELECT content FROM ai_messages WHERE conversation_id = ? AND role = ? AND id < ? ORDER BY id DESC LIMIT 1'
-          ).get(msg.conversation_id, 'user', msg.id);
+      (async () => {
+        try {
+          if (msg.role === 'assistant' && msg.content) {
+            const userMsg = db.prepare(
+              'SELECT content FROM ai_messages WHERE conversation_id = ? AND role = ? AND id < ? ORDER BY id DESC LIMIT 1'
+            ).get(msg.conversation_id, 'user', msg.id);
 
-          const question = userMsg?.content?.trim() || '';
-          const answer = msg.content.trim();
+            const question = userMsg?.content?.trim() || '';
+            const answer = msg.content.trim();
 
-          if (question && answer && answer.length > 10) {
-            const title = question.slice(0, 80);
+            if (question && answer && answer.length > 10) {
+              const title = question.slice(0, 80);
+              const similar = await findSimilarLearnedRaw(question);
 
-            // 智能去重：查找相似的已有条目
-            const similar = findSimilarLearned(question);
-
-            if (similar) {
-              // 相似问题已存在 → 追加新回答作为补充
-              const newAnswer = answer;
-              if (!similar.content.includes(newAnswer.slice(0, 50))) {
-                db.prepare("UPDATE ai_knowledge SET content = content || ?, updated_at = datetime('now','localtime') WHERE id = ?")
-                  .run('\n\n补充回答：' + newAnswer, similar.id);
-                try { rebuildRagIndex(true); } catch {}
-                console.log('🧠 AI自学习: 追加回答到相似条目 "' + similar.title + '" (相似度:' + similar.score.toFixed(2) + ')');
+              if (similar) {
+                const newAnswer = answer;
+                if (!similar.content.includes(newAnswer.slice(0, 50))) {
+                  db.prepare("UPDATE ai_knowledge SET content = content || ?, updated_at = datetime('now','localtime') WHERE id = ?")
+                    .run('\n\n补充回答：' + newAnswer, similar.id);
+                  rebuildRagAsync();
+                  console.log('🧠 AI自学习: 追加回答到相似条目 "' + similar.title + '" (相似度:' + similar.score.toFixed(2) + ')');
+                }
+              } else {
+                db.prepare(
+                  'INSERT INTO ai_knowledge (title, content, category, tags) VALUES (?, ?, ?, ?)'
+                ).run(
+                  title,
+                  '用户问题：' + question + '\n\n参考回答：' + answer,
+                  '自动学习',
+                  JSON.stringify(['auto_learned', '用户好评'])
+                );
+                rebuildRagAsync();
+                console.log('🧠 AI自学习: 保存优秀回答 "' + title + '"');
               }
-            } else {
-              // 全新问题 → 新建条目
-              db.prepare(
-                'INSERT INTO ai_knowledge (title, content, category, tags) VALUES (?, ?, ?, ?)'
-              ).run(
-                title,
-                '用户问题：' + question + '\n\n参考回答：' + answer,
-                '自动学习',
-                JSON.stringify(['auto_learned', '用户好评'])
-              );
-              try { rebuildRagIndex(true); } catch {}
-              console.log('🧠 AI自学习: 保存优秀回答 "' + title + '"');
             }
           }
+        } catch (e) {
+          console.warn('AI自学习保存失败:', e.message);
         }
-      } catch (e) {
-        console.warn('AI自学习保存失败:', e.message);
-      }
+      })();
     }
 
     res.json({ ok: true });
@@ -1390,7 +1394,7 @@ app.post('/api/admin/ai/knowledge', verifyAdminToken, requireAdmin, (req, res) =
     if (existing) return res.status(409).json({ error: '已存在同名知识：' + title });
     const result = db.prepare('INSERT INTO ai_knowledge (title, content, category, tags) VALUES (?, ?, ?, ?)').run(title, content, category || '', JSON.stringify(tags || []));
     const item = db.prepare('SELECT * FROM ai_knowledge WHERE id = ?').get(result.lastInsertRowid);
-    try { rebuildRagIndex(true); } catch {}
+    rebuildRagAsync()
     res.status(201).json({ item });
   } catch (err) {
     res.status(500).json({ error: '创建知识库条目失败' });
@@ -1404,7 +1408,7 @@ app.put('/api/admin/ai/knowledge/:id', verifyAdminToken, requireAdmin, (req, res
     db.prepare('UPDATE ai_knowledge SET title = COALESCE(?, title), content = COALESCE(?, content), category = COALESCE(?, category), tags = COALESCE(?, tags), status = COALESCE(?, status), updated_at = datetime(\'now\',\'localtime\') WHERE id = ?')
       .run(title || null, content || null, category || null, tags ? JSON.stringify(tags) : null, status || null, req.params.id);
     const item = db.prepare('SELECT * FROM ai_knowledge WHERE id = ?').get(req.params.id);
-    try { rebuildRagIndex(true); } catch {}
+    rebuildRagAsync()
     res.json({ item });
   } catch (err) {
     res.status(500).json({ error: '更新知识库条目失败' });
@@ -1415,7 +1419,7 @@ app.delete('/api/admin/ai/knowledge/:id', verifyAdminToken, requireAdmin, (req, 
   try {
     const db = getDb();
     db.prepare('DELETE FROM ai_knowledge WHERE id = ?').run(req.params.id);
-    try { rebuildRagIndex(true); } catch {}
+    rebuildRagAsync()
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: '删除知识库条目失败' });
@@ -1497,7 +1501,7 @@ app.post('/api/admin/ai/knowledge/import', verifyAdminToken, requireAdmin, async
       existingTitles.add(title);
       imported++;
     }
-    try { rebuildRagIndex(true); } catch {}
+    rebuildRagAsync()
     const msg = skipped > 0 ? `成功导入 ${imported} 条知识，跳过 ${skipped} 条重复` : `成功导入 ${imported} 条知识`;
     res.json({ message: msg, count: imported, skipped });
   } catch (err) {
@@ -1507,9 +1511,9 @@ app.post('/api/admin/ai/knowledge/import', verifyAdminToken, requireAdmin, async
 });
 
 // 手动重建 RAG 索引
-app.post('/api/admin/ai/rebuild-index', verifyAdminToken, requireAdmin, (req, res) => {
+app.post('/api/admin/ai/rebuild-index', verifyAdminToken, requireAdmin, async (req, res) => {
   try {
-    const count = rebuildRagIndex(true);
+    const count = await rebuildRagIndex(true);
     res.json({ ok: true, count, message: `索引已重建，共 ${count} 条知识` });
   } catch (err) {
     res.status(500).json({ error: '重建索引失败: ' + err.message });
@@ -1521,13 +1525,13 @@ app.get('/api/admin/ai/rag-chunks', verifyAdminToken, requireAdmin, (req, res) =
   try {
     const db = getDb();
     const knowledge = db.prepare(
-      "SELECT id, title, content, category, 'knowledge' as source FROM ai_knowledge WHERE status = 'active'"
+      "SELECT 'k:' || id || ':0' as chunkId, id, title, content, category, 'knowledge' as source FROM ai_knowledge WHERE status = 'active'"
     ).all();
     const tutorials = db.prepare(
-      "SELECT 100000 + id as id, title, content, category, 'tutorial' as source FROM tutorials WHERE status = 'published'"
+      "SELECT 't:' || id || ':0' as chunkId, id, title, content, category, 'tutorial' as source FROM tutorials WHERE status = 'published'"
     ).all();
     const faqs = db.prepare(
-      "SELECT 200000 + id as id, question as title, answer as content, category, 'faq' as source FROM faqs WHERE status = 'active'"
+      "SELECT 'f:' || id || ':0' as chunkId, id, question as title, answer as content, category, 'faq' as source FROM faqs WHERE status = 'active'"
     ).all();
     const all = [...knowledge, ...tutorials, ...faqs];
     res.json({ chunks: all, total: all.length });
@@ -1538,11 +1542,11 @@ app.get('/api/admin/ai/rag-chunks', verifyAdminToken, requireAdmin, (req, res) =
 
 // RAG 检索测试
 const { retrieve: ragRetrieve } = require('./services/rag');
-app.post('/api/admin/ai/rag-search', verifyAdminToken, requireAdmin, (req, res) => {
+app.post('/api/admin/ai/rag-search', verifyAdminToken, requireAdmin, async (req, res) => {
   try {
     const { query, topK = 5 } = req.body;
     if (!query) return res.status(400).json({ error: '请输入查询内容' });
-    const results = ragRetrieve(query, topK);
+    const results = await ragRetrieve(query, topK);
     res.json({ results, query });
   } catch (err) {
     res.status(500).json({ error: '检索失败: ' + err.message });
@@ -1649,7 +1653,7 @@ app.post('/api/admin/knowledge', verifyAdminToken, requireAdmin, (req, res) => {
     const r = db.prepare('INSERT INTO knowledge_base (title, content, tags, category) VALUES (?,?,?,?)')
       .run(title, content||'', JSON.stringify(tags||[]), category||'');
     const item = db.prepare('SELECT * FROM knowledge_base WHERE id=?').get(r.lastInsertRowid);
-    try { rebuildRagIndex(true); } catch {}
+    rebuildRagAsync()
     res.status(201).json({ item });
   } catch (err) {
     console.error(err);
@@ -1665,30 +1669,6 @@ app.delete('/api/admin/knowledge/:id', verifyAdminToken, requireAdmin, (req, res
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: '删除失败' });
-  }
-});
-
-// ============================================================
-//  AI 问答接口（预留，对接外部 AI API）
-// ============================================================
-
-app.post('/api/ai/ask', (req, res) => {
-  try {
-    const { question } = req.body;
-    if (!question) return res.status(400).json({ error: '请输入问题' });
-
-    const db = getDb();
-    // 简单的关键词匹配（后续对接 AI API）
-    const items = db.prepare('SELECT title, content FROM knowledge_base WHERE status = ? AND (title LIKE ? OR content LIKE ?)').all('active', '%' + question + '%', '%' + question + '%');
-
-    if (items.length > 0) {
-      res.json({ answer: items[0].content, source: items[0].title, matched: true });
-    } else {
-      res.json({ answer: '暂无匹配的答案，建议提交工单让技术团队帮您处理。', matched: false });
-    }
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: '查询失败' });
   }
 });
 
@@ -1767,7 +1747,7 @@ app.delete('/api/admin/admins/:id', verifyAdminToken, requireAdmin, (req, res) =
 //  文件上传（带 OSS 支持）
 // ============================================================
 
-app.post('/api/upload/file', upload.single('file'), async (req, res) => {
+app.post('/api/upload/file', verifyToken, upload.single('file'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: '请选择文件' });
   }
@@ -1951,8 +1931,8 @@ app.listen(PORT, () => {
   ║   Env: development              ║
   ╚══════════════════════════════════╝
   `);
-  // 启动时重建 RAG 索引（包含教程和FAQ）
-  try { rebuildRagIndex(); } catch (e) { console.warn('启动时 RAG 索引重建失败:', e.message); }
+  // 启动时异步重建 RAG 索引（不阻塞服务器启动）
+  rebuildRagIndex().catch(e => console.warn('启动时 RAG 索引重建失败:', e.message));
 
   // 每 5 分钟自动关闭超过 30 分钟无新消息的对话
   setInterval(() => {
@@ -1974,7 +1954,7 @@ app.listen(PORT, () => {
       try {
         const result = cleanupLearned(200);
         if (result.merged > 0 || result.removed > 0) {
-          rebuildRagIndex();
+          rebuildRagAsync();
           console.log('🧠 自动学习清理: 合并 ' + result.merged + ' 条, 淘汰 ' + result.removed + ' 条');
         }
       } catch (e) { console.warn('自动学习清理失败:', e.message); }

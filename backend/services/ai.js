@@ -19,10 +19,10 @@ function getAIConfig() {
 /**
  * RAG 检索：根据用户问题检索相关知识（支持图片）
  */
-function getKnowledgeContext(query) {
+async function getKnowledgeContext(query) {
   if (!query) return '';
   try {
-    const results = ragRetrieve(query, 5);
+    const results = await ragRetrieve(query, 5);
     if (results.length === 0) return '';
     let context = '以下是与用户问题最相关的知识库内容，请基于这些信息回答：\n\n';
     for (const item of results) {
@@ -118,7 +118,7 @@ async function chat(history, userMessage, imageUrl = '') {
   let systemPrompt = config.ai_system_prompt || '你是 imai.work 的智能客服助手，专门解答关于养号、获客、短视频运营的问题。请用中文回答，语气友好专业。如果不确定答案，请诚实说明并建议用户联系人工客服。';
 
   // RAG 检索相关知识
-  const knowledge = getKnowledgeContext(userMessage);
+  const knowledge = await getKnowledgeContext(userMessage);
   if (knowledge) {
     systemPrompt += '\n\n' + knowledge;
   }

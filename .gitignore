@@ -22,3 +22,4 @@ backend/data.db-wal
 # IDE
 .vscode/
 .idea/
+.jwt-secrets

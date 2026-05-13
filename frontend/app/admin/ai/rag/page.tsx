@@ -5,6 +5,7 @@ import { adminApi } from '@/lib/api';
 import { showToast } from '@/components/ui/Toast';
 
 interface ChunkItem {
+  chunkId: string;
   id: number;
   title: string;
   content: string;
@@ -13,12 +14,12 @@ interface ChunkItem {
 }
 
 interface SearchResult {
-  id: number;
   title: string;
   content: string;
   category: string;
   score: number;
   source: string;
+  parentId: number;
 }
 
 export default function RagTestPage() {
@@ -151,7 +152,7 @@ export default function RagTestPage() {
           <div className="mt-4 space-y-3">
             <p className="text-xs text-[#64748b]">返回 {results.length} 条结果：</p>
             {results.map((r, i) => (
-              <div key={`${r.id}-${i}`} className="rounded-lg border border-[#e2e8f0] p-4 bg-[#f8fafc]">
+              <div key={`${r.source}-${r.parentId}-${i}`} className="rounded-lg border border-[#e2e8f0] p-4 bg-[#f8fafc]">
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-sm font-semibold text-[#1e293b]">#{i + 1}</span>
                   <span className={`px-2 py-0.5 rounded text-xs ${sourceColors[r.source] || 'bg-gray-100 text-gray-600'}`}>
@@ -203,7 +204,7 @@ export default function RagTestPage() {
         ) : (
           <div className="space-y-2 max-h-[600px] overflow-y-auto">
             {filteredChunks.map(chunk => (
-              <details key={chunk.id} className="rounded-lg border border-[#e2e8f0] overflow-hidden group">
+              <details key={chunk.chunkId} className="rounded-lg border border-[#e2e8f0] overflow-hidden group">
                 <summary className="flex items-center gap-2 px-4 py-3 cursor-pointer hover:bg-[#f8fafc] transition-colors">
                   <span className={`px-2 py-0.5 rounded text-xs ${sourceColors[chunk.source] || 'bg-gray-100 text-gray-600'}`}>
                     {sourceLabels[chunk.source] || chunk.source}
@@ -212,7 +213,7 @@ export default function RagTestPage() {
                     <span className="px-2 py-0.5 rounded text-xs bg-[#f1f5f9] text-[#64748b]">{chunk.category}</span>
                   )}
                   <span className="text-sm text-[#1e293b] font-medium truncate flex-1">{chunk.title}</span>
-                  <span className="text-xs text-[#94a3b8] font-mono">ID: {chunk.id}</span>
+                  <span className="text-xs text-[#94a3b8] font-mono">{chunk.chunkId}</span>
                   <svg className="w-4 h-4 text-[#94a3b8] transition-transform group-open:rotate-180" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
                   </svg>
