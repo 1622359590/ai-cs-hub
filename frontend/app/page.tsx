@@ -482,7 +482,7 @@ export default function SupportPage() {
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); handleSend(); }
                   }}
                   placeholder="输入你的问题... (Enter 发送, Shift+Enter 换行)"
                   className="input flex-1 resize-none text-sm"
