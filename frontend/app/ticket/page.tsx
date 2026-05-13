@@ -261,43 +261,44 @@ export default function TicketPage() {
               )}
 
               {/* 搜索 + 筛选 */}
-              <div className="mb-4 space-y-3">
-                {/* 搜索框 */}
-                <div className="relative">
-                  <svg className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
-                  </svg>
-                  <input
-                    value={searchInput}
-                    onChange={e => handleSearchInput(e.target.value)}
-                    placeholder="搜索工单标题或描述..."
-                    className="input pl-10"
-                  />
-                  {searchInput && (
-                    <button
-                      onClick={() => { setSearchInput(''); setSearchQuery(''); }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                    </button>
-                  )}
-                </div>
-
-                {/* 状态筛选 */}
-                <div className="flex gap-1.5">
-                  {statusTabs.map(tab => (
-                    <button
-                      key={tab.key}
-                      onClick={() => setStatusFilter(tab.key)}
-                      className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
-                        statusFilter === tab.key
-                          ? 'bg-[var(--accent)] text-white shadow-sm shadow-[var(--accent)]/25'
-                          : 'bg-white text-[var(--text-secondary)] border border-[var(--border)] hover:border-[var(--accent-light)] hover:text-[var(--accent)]'
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
+              <div className="card p-3 mb-4">
+                <div className="flex gap-3 items-center">
+                  {/* 搜索框 */}
+                  <div className="relative flex-1">
+                    <svg className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+                    </svg>
+                    <input
+                      value={searchInput}
+                      onChange={e => handleSearchInput(e.target.value)}
+                      placeholder="搜索工单..."
+                      className="w-full bg-[var(--bg-secondary)] border border-transparent focus:border-[var(--accent)] focus:bg-white rounded-lg pl-9 pr-9 py-2 text-sm text-[var(--text-primary)] outline-none transition-all placeholder:text-[var(--text-muted)]"
+                    />
+                    {searchInput ? (
+                      <button
+                        onClick={() => { setSearchInput(''); setSearchQuery(''); }}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                      </button>
+                    ) : null}
+                  </div>
+                  {/* 状态筛选 */}
+                  <div className="flex gap-1">
+                    {statusTabs.map(tab => (
+                      <button
+                        key={tab.key}
+                        onClick={() => setStatusFilter(tab.key)}
+                        className={`rounded-lg px-3 py-2 text-xs font-medium transition-all whitespace-nowrap ${
+                          statusFilter === tab.key
+                            ? 'bg-[var(--accent)] text-white shadow-sm shadow-[var(--accent)]/25'
+                            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--accent)]'
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -340,21 +341,21 @@ export default function TicketPage() {
                     })}
                   </div>
 
-                  {/* 分页 */}
-                  {totalPages > 1 && (
-                    <div className="mt-6 flex items-center justify-between">
-                      <p className="text-xs text-[var(--text-muted)]">
-                        第 {page}/{totalPages} 页，共 {total} 条
-                      </p>
-                      <div className="flex gap-1.5">
+                  {/* 分页栏 */}
+                  <div className="mt-4 flex items-center justify-between rounded-xl border border-[var(--border)] bg-white px-4 py-3">
+                    <p className="text-xs text-[var(--text-muted)]">
+                      共 <span className="font-semibold text-[var(--text-primary)]">{total}</span> 条
+                      {totalPages > 1 && <>, 第 {page}/{totalPages} 页</>}
+                    </p>
+                    {totalPages > 1 ? (
+                      <div className="flex items-center gap-1">
                         <button
                           onClick={() => handlePage(page - 1)}
                           disabled={page <= 1}
-                          className="btn btn-ghost btn-xs disabled:opacity-30"
+                          className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                         >
-                          ← 上一页
+                          ‹
                         </button>
-                        {/* 页码 */}
                         {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
                           let pageNum: number;
                           if (totalPages <= 5) {
@@ -370,9 +371,9 @@ export default function TicketPage() {
                             <button
                               key={pageNum}
                               onClick={() => handlePage(pageNum)}
-                              className={`h-7 min-w-[28px] rounded-md text-xs font-medium transition-all ${
+                              className={`min-w-[28px] h-7 rounded-lg text-xs font-medium transition-all ${
                                 page === pageNum
-                                  ? 'bg-[var(--accent)] text-white shadow-sm'
+                                  ? 'bg-[var(--accent)] text-white shadow-sm shadow-[var(--accent)]/20'
                                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)]'
                               }`}
                             >
@@ -383,13 +384,15 @@ export default function TicketPage() {
                         <button
                           onClick={() => handlePage(page + 1)}
                           disabled={page >= totalPages}
-                          className="btn btn-ghost btn-xs disabled:opacity-30"
+                          className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                         >
-                          下一页 →
+                          ›
                         </button>
                       </div>
-                    </div>
-                  )}
+                    ) : (
+                      <span className="text-xs text-[var(--text-muted)]">已是全部</span>
+                    )}
+                  </div>
                 </>
               ) : (
                 <div className="card text-center py-12">
