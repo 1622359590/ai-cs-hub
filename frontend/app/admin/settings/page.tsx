@@ -377,6 +377,119 @@ export default function AdminSettingsPage() {
                 />
                 <p className="mt-1.5 text-xs text-[#94a3b8]">定义 AI 的角色、专业领域和回答风格</p>
               </div>
+              <div className="border-t border-[#e2e8f0] pt-5">
+                <p className="mb-4 text-sm font-semibold text-[#1e293b]">📐 向量检索（Embedding）</p>
+                <p className="mb-4 text-xs text-[#64748b]">用于知识库语义检索。配置后 AI 客服能更准确地理解用户问题，匹配相关知识。</p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">Embedding 服务商</label>
+                    <select
+                      value={settings.embedding_provider || ''}
+                      onChange={e => {
+                        const provider = e.target.value;
+                        update('embedding_provider', provider);
+                        // 自动填充默认配置
+                        const defaults: Record<string, {url: string, model: string}> = {
+                          qwen: { url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings', model: 'text-embedding-v3' },
+                          openai: { url: 'https://api.openai.com/v1/embeddings', model: 'text-embedding-3-small' },
+                        };
+                        if (defaults[provider]) {
+                          update('embedding_base_url', defaults[provider].url);
+                          update('embedding_model', defaults[provider].model);
+                        } else {
+                          update('embedding_base_url', '');
+                          update('embedding_model', '');
+                        }
+                      }}
+                      className="select"
+                    >
+                      <option value="">未启用（仅使用关键词匹配）</option>
+                      <option value="local">本地模型（开发环境）</option>
+                      <option value="qwen">阿里云 DashScope</option>
+                      <option value="openai">OpenAI</option>
+                    </select>
+                    <p className="mt-1.5 text-xs text-[#94a3b8]">
+                      {settings.embedding_provider === 'local'
+                        ? '⚠️ 本地模型仅适用于开发环境，需要额外启动 Python Embedding 服务'
+                        : settings.embedding_provider === 'qwen'
+                        ? '推荐 text-embedding-v3，有免费额度，中文效果好'
+                        : settings.embedding_provider === 'openai'
+                        ? 'text-embedding-3-small，按量付费'
+                        : '选择一个 Embedding 服务商用于知识库向量化'
+                      }
+                    </p>
+                  </div>
+                  {settings.embedding_provider && settings.embedding_provider !== 'local' && (
+                    <>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">API Key</label>
+                        <input value={settings.embedding_api_key || ''} onChange={e => update('embedding_api_key', e.target.value)} className="input" type="password" />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">模型</label>
+                        <select value={settings.embedding_model || ''} onChange={e => update('embedding_model', e.target.value)} className="select">
+                          {settings.embedding_provider === 'qwen' && (
+                            <>
+                              <option value="text-embedding-v3">text-embedding-v3（推荐，有免费额度）</option>
+                              <option value="text-embedding-v4">text-embedding-v4（效果更好，付费）</option>
+                            </>
+                          )}
+                          {settings.embedding_provider === 'openai' && (
+                            <>
+                              <option value="text-embedding-3-small">text-embedding-3-small（推荐）</option>
+                              <option value="text-embedding-3-large">text-embedding-3-large（效果更好）</option>
+                              <option value="text-embedding-ada-002">text-embedding-ada-002（旧版）</option>
+                            </>
+                          )}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">API 地址</label>
+                        <input
+                          value={settings.embedding_base_url || ''}
+                          onChange={e => update('embedding_base_url', e.target.value)}
+                          className="input"
+                        />
+                        <p className="mt-1 text-xs text-[#94a3b8]">已自动填入默认地址，通常无需修改</p>
+                      </div>
+                    </>
+                  )}
+                  {settings.embedding_provider === 'local' && (
+                    <div className="rounded-lg bg-[#fffbeb] border border-[#fde68a] p-4">
+                      <p className="text-sm text-[#92400e]">
+                        ⚠️ 本地模式需要额外启动 Embedding 服务：
+                      </p>
+                      <code className="mt-2 block rounded bg-[#fef3c7] px-3 py-2 text-xs text-[#78350f]">
+                        cd ~/imai-website && source .venv/bin/activate && python3 embedding_server.py
+                      </code>
+                      <p className="mt-2 text-xs text-[#92400e]">服务器部署请切换为云 API 服务商</p>
+                    </div>
+                  )}
+                  <div>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const token = localStorage.getItem('imai-admin-token');
+                          const res = await fetch('/api/admin/ai/rebuild-index', {
+                            method: 'POST',
+                            headers: { Authorization: `Bearer ${token}` },
+                          });
+                          const data = await res.json();
+                          if (!res.ok) throw new Error(data.error);
+                          showToast('索引重建成功: ' + (data.count || '') + ' 条', 'success');
+                        } catch (err: any) {
+                          showToast('重建失败: ' + err.message, 'error');
+                        }
+                      }}
+                      className="btn btn-secondary btn-sm"
+                    >
+                      🔄 重建向量索引
+                    </button>
+                    <p className="mt-1.5 text-xs text-[#94a3b8]">更换 Embedding 服务商后，需要重建索引以使用新的向量模型</p>
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label className="mb-1.5 block text-sm font-medium text-[#1e293b]">知识库</label>
                 <div className="rounded-lg border-2 border-dashed border-[#e2e8f0] p-6 text-center">

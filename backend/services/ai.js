@@ -17,7 +17,7 @@ function getAIConfig() {
 }
 
 /**
- * RAG 检索：根据用户问题检索相关知识
+ * RAG 检索：根据用户问题检索相关知识（支持图片）
  */
 function getKnowledgeContext(query) {
   if (!query) return '';
@@ -26,7 +26,12 @@ function getKnowledgeContext(query) {
     if (results.length === 0) return '';
     let context = '以下是与用户问题最相关的知识库内容，请基于这些信息回答：\n\n';
     for (const item of results) {
-      context += `【${item.category || '未分类'}】${item.title}\n${item.content}\n\n`;
+      context += `【${item.category || '未分类'}】${item.title}\n${item.content}\n`;
+      // 附带相关图片
+      if (item.images && item.images.length > 0) {
+        context += `相关图片：${item.images.join(', ')}\n`;
+      }
+      context += '\n';
     }
     return context;
   } catch (e) {
@@ -117,6 +122,9 @@ async function chat(history, userMessage, imageUrl = '') {
   if (knowledge) {
     systemPrompt += '\n\n' + knowledge;
   }
+
+  // 告诉 LLM 可以输出图片
+  systemPrompt += '\n\n【回复规则】如果知识库中有相关图片，请在回答中用 markdown 图片语法展示：![描述](图片URL)。图片能让用户更直观地理解。';
 
   // 构建消息列表
   const messages = [{ role: 'system', content: systemPrompt }];

@@ -1,7 +1,10 @@
 /**
  * RAG 检索服务 — 混合检索（BM25 + 向量）+ Re-ranking
+ * 向量检索使用真实 Embedding API（DeepSeek / OpenAI 兼容）
  */
 const { getDb } = require('../database/schema');
+const { execSync } = require('child_process');
+
 let sqliteVecLoaded = false;
 function ensureVec(db) {
   if (sqliteVecLoaded) return;
@@ -12,6 +15,27 @@ function ensureVec(db) {
   } catch (e) {
     console.warn('sqlite-vec 加载失败:', e.message);
   }
+}
+
+// Embedding 配置
+const EMBEDDING_DIMENSION = 512; // bge-small-zh-v1.5 输出维度
+const EMBEDDING_BATCH_SIZE = 10; // DashScope 限制每批最多 10 条
+
+// Embedding 模型映射
+const EMBEDDING_MODELS = {
+  deepseek: 'deepseek-embedding',
+  openai: 'text-embedding-3-small',
+  qwen: 'text-embedding-v3',
+};
+
+// Provider 对应的 Embedding API URL
+function getEmbeddingUrl(provider) {
+  const urls = {
+    deepseek: 'https://api.deepseek.com/embeddings',
+    openai: 'https://api.openai.com/v1/embeddings',
+    qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings',
+  };
+  return urls[provider] || '';
 }
 
 // BM25 参数
@@ -114,36 +138,121 @@ class BM25Index {
   }
 }
 
-// 向量索引（使用 sqlite-vec）
-class VectorIndex {
-  constructor() {
-    this.dimension = 128; // 特征哈希维度
+/**
+ * 调用 Embedding API（同步，通过 curl）
+ * @param {string} text - 要嵌入的文本
+ * @param {object} config - {provider, apiKey, baseUrl, model}
+ * @returns {Float32Array|null} 嵌入向量
+ */
+function callEmbeddingAPI(text, config) {
+  const url = config.baseUrl || getEmbeddingUrl(config.provider);
+  if (!url || !config.apiKey) return null;
+
+  const model = config.model || EMBEDDING_MODELS[config.provider] || 'deepseek-embedding';
+  const body = JSON.stringify({
+    model,
+    input: text.slice(0, 8000), // 截断超长文本
+  });
+
+  try {
+    const result = execSync(`curl -s -X POST "${url}" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer ${config.apiKey}" \
+      -d '${body.replace(/'/g, "'\''")}'`, {
+      encoding: 'utf-8',
+      timeout: 30000,
+    });
+
+    const json = JSON.parse(result);
+    if (json.data && json.data[0] && json.data[0].embedding) {
+      return new Float32Array(json.data[0].embedding);
+    }
+    if (json.error) {
+      console.warn('Embedding API 错误:', json.error.message || json.error);
+    }
+    return null;
+  } catch (e) {
+    console.warn('Embedding API 调用失败:', e.message);
+    return null;
+  }
+}
+
+/**
+ * 批量调用 Embedding API
+ * @param {string[]} texts - 文本数组
+ * @param {object} config - API 配置
+ * @returns {Float32Array[]} 嵌入向量数组（失败的用 null 占位）
+ */
+function callEmbeddingBatch(texts, config) {
+  const url = config.baseUrl || getEmbeddingUrl(config.provider);
+  if (!url || !config.apiKey) return texts.map(() => null);
+
+  const model = config.model || EMBEDDING_MODELS[config.provider] || 'deepseek-embedding';
+  const results = new Array(texts.length).fill(null);
+
+  // 分批处理
+  for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
+    const batch = texts.slice(i, i + EMBEDDING_BATCH_SIZE);
+    const body = JSON.stringify({
+      model,
+      input: batch.map(t => t.slice(0, 8000)),
+    });
+
+    try {
+      const result = execSync(`curl -s -X POST "${url}" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${config.apiKey}" \
+        -d '${body.replace(/'/g, "'\''")}'`, {
+        encoding: 'utf-8',
+        timeout: 60000,
+      });
+
+      const json = JSON.parse(result);
+      if (json.data) {
+        // 按 index 排序并填充结果
+        for (const item of json.data) {
+          results[i + item.index] = new Float32Array(item.embedding);
+        }
+      }
+      if (json.error) {
+        console.warn('Embedding 批量 API 错误:', json.error.message || json.error);
+      }
+    } catch (e) {
+      console.warn('Embedding 批量 API 调用失败:', e.message);
+    }
+
+    // 批次间隔，避免限流
+    if (i + EMBEDDING_BATCH_SIZE < texts.length) {
+      try { execSync('sleep 1'); } catch {}
+    }
   }
 
-  /**
-   * 简单特征哈希：将文本转为固定维度向量
-   * 用 SimHash 思想，对中文和英文都有效
-   */
-  textToVector(text) {
-    const tokens = tokenize(text);
-    const vector = new Float32Array(this.dimension);
-    for (let i = 0; i < tokens.length; i++) {
-      const token = tokens[i];
-      // 简单哈希
-      let hash = 0;
-      for (let j = 0; j < token.length; j++) {
-        hash = ((hash << 5) - hash + token.charCodeAt(j)) | 0;
-      }
-      const idx = Math.abs(hash) % this.dimension;
-      // 使用 +/-1 投影（特征哈希）
-      vector[idx] += (hash > 0 ? 1 : -1);
-    }
-    // L2 归一化
-    let norm = 0;
-    for (let i = 0; i < this.dimension; i++) norm += vector[i] * vector[i];
-    norm = Math.sqrt(norm) || 1;
-    for (let i = 0; i < this.dimension; i++) vector[i] /= norm;
-    return vector;
+  return results;
+}
+
+/**
+ * 从 settings 读取 Embedding 配置
+ * 支持独立的 embedding 配置，回退到通用 ai 配置
+ */
+function getEmbeddingConfig() {
+  const db = getDb();
+  const rows = db.prepare(
+    "SELECT key, value FROM settings WHERE key IN ('embedding_provider','embedding_api_key','embedding_base_url','embedding_model','ai_provider','ai_api_key','ai_base_url')"
+  ).all();
+  const config = {};
+  for (const row of rows) config[row.key] = row.value;
+  return {
+    provider: config.embedding_provider || config.ai_provider || 'deepseek',
+    apiKey: config.embedding_api_key || config.ai_api_key || '',
+    baseUrl: config.embedding_base_url || '',
+    model: config.embedding_model || '',
+  };
+}
+
+// 向量索引（使用真实 Embedding API）
+class VectorIndex {
+  constructor() {
+    this.dimension = EMBEDDING_DIMENSION;
   }
 
   initTable(db) {
@@ -156,26 +265,46 @@ class VectorIndex {
     `);
   }
 
-  upsert(db, id, text) {
-    const vector = this.textToVector(text);
-    const intId = Math.floor(Number(id));
-    if (isNaN(intId) || intId <= 0) return;
-    // 先删除旧的
-    try { db.prepare('DELETE FROM knowledge_vec WHERE id = ' + intId).run(); } catch {}
-    // 插入新的（sqlite-vec 要求主键必须是字面量整数，不能用参数绑定）
-    db.prepare('INSERT INTO knowledge_vec (id, embedding) VALUES (' + intId + ', ?)').run(Buffer.from(vector.buffer));
+  /**
+   * 重建向量表（维度变化时删除重建）
+   */
+  rebuildTable(db) {
+    ensureVec(db);
+    try {
+      // 检查现有表的维度
+      const info = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'knowledge_vec'").get();
+      if (info && !info.sql.includes(`float[${this.dimension}]`)) {
+        console.log(`向量表维度变化，重建表 (${this.dimension}维)`);
+        db.prepare('DROP TABLE IF EXISTS knowledge_vec').run();
+      }
+    } catch {}
+    this.initTable(db);
   }
 
-  search(db, queryText, topK = 5) {
+  upsert(db, id, text, embedding) {
+    if (!embedding) return false;
+    const intId = Math.floor(Number(id));
+    if (isNaN(intId) || intId <= 0) return false;
+    try {
+      db.prepare('DELETE FROM knowledge_vec WHERE id = ' + intId).run();
+      db.prepare('INSERT INTO knowledge_vec (id, embedding) VALUES (' + intId + ', ?)').run(
+        Buffer.from(embedding.buffer)
+      );
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  search(db, queryVector, topK = 5) {
     ensureVec(db);
-    const queryVector = this.textToVector(queryText);
+    if (!queryVector) return [];
     try {
       const results = db.prepare(`
         SELECT id, distance FROM knowledge_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?
       `).all(Buffer.from(queryVector.buffer), topK);
-      return results.map(r => ({ id: r.id, score: 1 - r.distance })); // distance -> similarity
+      return results.map(r => ({ id: r.id, score: 1 - r.distance }));
     } catch (e) {
-      // 如果向量表还没建好，返回空
       return [];
     }
   }
@@ -185,11 +314,107 @@ class VectorIndex {
 let bm25Index = null;
 const vectorIndex = new VectorIndex();
 
+// ===== 文档拆分 (Chunking) =====
+const CHUNK_MAX_CHARS = 400; // 每块最大字符数
+const CHUNK_OVERLAP = 50;    // 块之间重叠字符数
+
+/**
+ * 将长文本按段落拆分成小块
+ * 优先按段落拆分，段落太长则按句子拆分
+ * @param {string} text - 原始文本
+ * @param {number} maxChars - 每块最大字符数
+ * @returns {string[]} 拆分后的文本块
+ */
+function chunkText(text, maxChars = CHUNK_MAX_CHARS) {
+  if (!text || text.length <= maxChars) return [text];
+
+  const chunks = [];
+  // 按段落拆分（双换行）
+  const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim());
+
+  let current = '';
+  for (const para of paragraphs) {
+    if (current.length + para.length + 1 <= maxChars) {
+      current = current ? current + '\n\n' + para : para;
+    } else {
+      if (current) chunks.push(current);
+      // 单个段落超长，按句子拆分
+      if (para.length > maxChars) {
+        const sentences = para.split(/(?<=[。！？.!?\n])/).filter(s => s.trim());
+        let sentBuf = '';
+        for (const sent of sentences) {
+          if (sentBuf.length + sent.length <= maxChars) {
+            sentBuf += sent;
+          } else {
+            if (sentBuf) chunks.push(sentBuf);
+            sentBuf = sent;
+          }
+        }
+        if (sentBuf) current = sentBuf;
+        else current = '';
+      } else {
+        current = para;
+      }
+    }
+  }
+  if (current) chunks.push(current);
+
+  // 添加重叠：每块末尾保留 overlap 字符到下一块开头
+  if (CHUNK_OVERLAP > 0 && chunks.length > 1) {
+    const overlapped = [chunks[0]];
+    for (let i = 1; i < chunks.length; i++) {
+      const prevTail = chunks[i - 1].slice(-CHUNK_OVERLAP);
+      overlapped.push(prevTail + chunks[i]);
+    }
+    return overlapped;
+  }
+
+  return chunks;
+}
+
+/**
+ * 将知识条目拆分成可索引的块
+ * 短文档不拆分，长文档按段落拆分
+ * @param {object} item - {id, title, content, category, source}
+ * @returns {object[]} 拆分后的块数组 [{id, title, content, source}]
+ */
+function chunkItem(item) {
+  const fullText = item.content || '';
+  if (fullText.length <= CHUNK_MAX_CHARS) {
+    // 短文档不拆分
+    return [{
+      id: item.id,
+      title: item.title,
+      content: item.title + ' ' + fullText,
+      source: item.source,
+      category: item.category,
+    }];
+  }
+
+  const chunks = chunkText(fullText);
+  return chunks.map((chunk, i) => ({
+    // 用 id * 1000 + chunkIndex 作为块 ID
+    id: item.id * 1000 + i,
+    title: item.title + (chunks.length > 1 ? ` (第${i + 1}/${chunks.length}部分)` : ''),
+    content: item.title + ' ' + chunk,
+    source: item.source,
+    category: item.category,
+    parentId: item.id,
+  }));
+}
+
 /**
  * 重建索引
  * 同时索引 ai_knowledge、tutorials（已发布）、faqs（激活状态）
  */
-function rebuildIndex() {
+// 块内容缓存（chunkId -> {title, content, category}）
+let chunkContentCache = {};
+
+/**
+ * 重建索引
+ * @param {boolean} forceVectors - 强制重建向量（CRUD 操作后需要）
+ */
+function rebuildIndex(forceVectors = false) {
   const db = getDb();
 
   // 1. ai_knowledge 表
@@ -220,28 +445,64 @@ function rebuildIndex() {
   }));
 
   // 合并所有数据源
-  const allItems = [...knowledgeItems, ...tutorialItems, ...faqItems];
+  const rawItems = [...knowledgeItems, ...tutorialItems, ...faqItems];
+
+  // 拆分长文档
+  const allItems = [];
+  let chunkCount = 0;
+  for (const item of rawItems) {
+    const chunks = chunkItem(item);
+    allItems.push(...chunks);
+    if (chunks.length > 1) chunkCount++;
+  }
+  if (chunkCount > 0) {
+    console.log(`文档拆分: ${chunkCount} 篇长文档被拆分成 ${allItems.length} 个块`);
+  }
+
+  // 更新块内容缓存
+  chunkContentCache = {};
+  for (const item of allItems) {
+    chunkContentCache[item.id] = {
+      title: item.title,
+      content: item.content,
+      category: item.category,
+    };
+  }
 
   // 重建 BM25
   bm25Index = new BM25Index();
   bm25Index.build(allItems);
 
-  // 重建向量
+  // 重建向量（使用真实 Embedding API）
   try {
-    vectorIndex.initTable(db);
-    // 清空旧数据
-    try { db.prepare('DELETE FROM knowledge_vec').run(); } catch {}
-    let vecCount = 0;
-    for (const item of allItems) {
-      try {
-        vectorIndex.upsert(db, item.id, item.title + ' ' + item.content);
-        vecCount++;
-      } catch (e) {
-        // 单条失败不影响其他条目
+    vectorIndex.rebuildTable(db);
+
+    // 检查是否需要重建向量（避免每次启动都调 API）
+    const currentVecCount = db.prepare('SELECT COUNT(*) as cnt FROM knowledge_vec').get().cnt;
+    if (!forceVectors && currentVecCount >= allItems.length) {
+      console.log(`向量索引已存在 (${currentVecCount} 条)，跳过重建`);
+    } else {
+      // 清空旧数据并重建
+      try { db.prepare('DELETE FROM knowledge_vec').run(); } catch {}
+
+      // 准备批量文本
+      const texts = allItems.map(item => item.title + ' ' + item.content);
+      const embedConfig = getEmbeddingConfig();
+
+      if (embedConfig.apiKey) {
+        console.log(`正在调用 ${embedConfig.provider} Embedding API，共 ${texts.length} 条...`);
+        const embeddings = callEmbeddingBatch(texts, embedConfig);
+
+        let successCount = 0;
+        for (let i = 0; i < allItems.length; i++) {
+          if (embeddings[i] && vectorIndex.upsert(db, allItems[i].id, allItems[i].title, embeddings[i])) {
+            successCount++;
+          }
+        }
+        console.log(`向量索引已建立: ${successCount}/${allItems.length} 条成功`);
+      } else {
+        console.warn('未配置 AI API Key，跳过向量索引构建（仅使用 BM25）');
       }
-    }
-    if (vecCount < allItems.length) {
-      console.warn('向量索引: ' + (allItems.length - vecCount) + ' 条插入失败，已跳过');
     }
   } catch (e) {
     console.warn('向量索引初始化失败（不影响 BM25 检索）:', e.message);
@@ -266,10 +527,16 @@ function retrieve(query, topK = 5) {
   // BM25 检索
   const bm25Results = bm25Index.search(query, topK * 2);
 
-  // 向量检索
+  // 向量检索（使用真实 Embedding API）
   let vecResults = [];
   try {
-    vecResults = vectorIndex.search(db, query, topK * 2);
+    const embedConfig = getEmbeddingConfig();
+    if (embedConfig.apiKey) {
+      const queryVector = callEmbeddingAPI(query, embedConfig);
+      if (queryVector) {
+        vecResults = vectorIndex.search(db, queryVector, topK * 2);
+      }
+    }
   } catch {}
 
   // 合并分数（加权：BM25 0.6 + 向量 0.4）
@@ -287,15 +554,25 @@ function retrieve(query, topK = 5) {
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);
 
-  // 获取知识条目详情（根据 ID 范围区分数据源）
+  // 获取知识条目详情
   if (sorted.length === 0) return [];
 
   const itemMap = {};
 
-  // 按 ID 范围分组查询
-  const knowledgeIds = sorted.filter(s => s.id < 100000).map(s => s.id);
-  const tutorialIds = sorted.filter(s => s.id >= 100000 && s.id < 200000).map(s => s.id - 100000);
-  const faqIds = sorted.filter(s => s.id >= 200000).map(s => s.id - 200000);
+  // 先从块缓存中查找
+  const uncachedIds = [];
+  for (const s of sorted) {
+    if (chunkContentCache[s.id]) {
+      itemMap[s.id] = chunkContentCache[s.id];
+    } else {
+      uncachedIds.push(s);
+    }
+  }
+
+  // 缓存未命中的，按 ID 范围查数据库
+  const knowledgeIds = uncachedIds.filter(s => s.id < 100000).map(s => s.id);
+  const tutorialIds = uncachedIds.filter(s => s.id >= 100000 && s.id < 200000).map(s => s.id - 100000);
+  const faqIds = uncachedIds.filter(s => s.id >= 200000).map(s => s.id - 200000);
 
   if (knowledgeIds.length > 0) {
     const ph = knowledgeIds.map(() => '?').join(',');
@@ -315,7 +592,25 @@ function retrieve(query, topK = 5) {
 
   return sorted
     .filter(s => itemMap[s.id])
-    .map(s => ({ ...itemMap[s.id], score: s.score }));
+    .map(s => {
+      const item = itemMap[s.id];
+      // 从内容中提取图片 URL
+      const images = [];
+      const content = item.content || '';
+      // Markdown 图片: ![alt](url)
+      const mdImgs = content.match(/!\[.*?\]\((https?:\/\/[^)]+)\)/g) || [];
+      for (const m of mdImgs) {
+        const url = m.match(/\((https?:\/\/[^)]+)\)/);
+        if (url) images.push(url[1]);
+      }
+      // HTML img: <img src="url">
+      const htmlImgs = content.match(/<img[^>]+src=["'](https?:\/\/[^"']+)["'][^>]*>/gi) || [];
+      for (const m of htmlImgs) {
+        const url = m.match(/src=["'](https?:\/\/[^"']+)["']/i);
+        if (url) images.push(url[1]);
+      }
+      return { ...item, score: s.score, images: [...new Set(images)] };
+    });
 }
 
 /**
@@ -336,29 +631,38 @@ function similarity(textA, textB) {
 }
 
 /**
- * 查找与给定问题相似的已有自动学习条目
+ * 查找与给定问题相似的已有自动学习条目（使用语义匹配，非 token 匹配）
  * @param {string} question - 用户问题
- * @param {number} threshold - 相似度阈值（默认 0.35）
+ * @param {number} threshold - 相似度阈值（默认 2.0，BM25 分数）
  * @returns {object|null} 相似条目或 null
  */
-function findSimilarLearned(question, threshold = 0.35) {
+function findSimilarLearned(question, threshold = 2.0) {
   const db = getDb();
-  const existing = db.prepare(
-    "SELECT id, title, content FROM ai_knowledge WHERE category = '自动学习' AND status = 'active'"
-  ).all();
 
-  let bestMatch = null;
-  let bestScore = 0;
+  // 确保索引已建
+  if (!bm25Index) rebuildIndex();
 
-  for (const item of existing) {
-    const score = similarity(question, item.title);
-    if (score > bestScore && score >= threshold) {
-      bestScore = score;
-      bestMatch = item;
+  // 用 BM25 语义检索（已包含同义词扩展）
+  const bm25Results = bm25Index.search(question, 10);
+
+  // 过滤出自动学习的条目
+  for (const result of bm25Results) {
+    if (result.score < threshold) break;
+
+    // 块 ID -> 原始 ID
+    const parentId = result.id >= 100000000 ? Math.floor(result.id / 1000) : result.id;
+
+    // 查数据库确认是自动学习条目
+    const item = db.prepare(
+      "SELECT id, title, content FROM ai_knowledge WHERE id = ? AND category = '自动学习' AND status = 'active'"
+    ).get(parentId);
+
+    if (item) {
+      return { ...item, score: result.score };
     }
   }
 
-  return bestMatch ? { ...bestMatch, score: bestScore } : null;
+  return null;
 }
 
 /**
