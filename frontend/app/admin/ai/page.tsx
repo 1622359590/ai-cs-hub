@@ -248,6 +248,16 @@ export default function KnowledgePage() {
     } catch {}
   };
 
+  const handleApprove = async (item: KnowledgeItem) => {
+    try {
+      await aiAdminApi.approveKnowledge(item.id);
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'active' } : i));
+      showToast('已通过审核', 'success');
+    } catch {}
+  };
+
+  const pendingCount = items.filter(i => i.status === 'hidden' && i.category === '自动学习').length;
+
   return (
     <div className="space-y-6">
       {/* 顶部 */}
@@ -277,6 +287,7 @@ export default function KnowledgePage() {
           <div className="text-sm">
             <span className="font-medium text-[#6d28d9]">AI 自学习</span>
             <span className="text-[#7c3aed]"> 已积累 {items.filter(i => i.category === '自动学习').length} 条优秀回答</span>
+            {pendingCount > 0 && <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">⏳ {pendingCount} 条待审核</span>}
             <span className="text-[#94a3b8]"> · 用户点👍的内容会自动保存到这里</span>
           </div>
           <button onClick={() => setFilterCategory('自动学习')} className="ml-auto text-xs font-medium text-[#8b5cf6] hover:underline">查看全部 →</button>
@@ -349,9 +360,16 @@ export default function KnowledgePage() {
                   </td>
                   <td className="text-xs text-[#64748b] max-w-[300px] truncate">{item.content.slice(0, 80)}</td>
                   <td>
-                    <button onClick={() => handleToggleStatus(item)} className={`text-xs font-medium px-2 py-0.5 rounded-full ${item.status === 'active' ? 'bg-[#ecfdf5] text-[#059669]' : 'bg-[#f1f5f9] text-[#94a3b8]'}`}>
-                      {item.status === 'active' ? '启用' : '隐藏'}
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => handleToggleStatus(item)} className={`text-xs font-medium px-2 py-0.5 rounded-full ${item.status === 'active' ? 'bg-[#ecfdf5] text-[#059669]' : 'bg-[#f1f5f9] text-[#94a3b8]'}`}>
+                        {item.status === 'active' ? '启用' : '隐藏'}
+                      </button>
+                      {item.status === 'hidden' && item.category === '自动学习' && (
+                        <button onClick={() => handleApprove(item)} className="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors">
+                          通过
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td>
                     <div className="flex gap-1">

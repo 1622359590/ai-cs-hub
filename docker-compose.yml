@@ -11,6 +11,12 @@ services:
       - backend-data:/app/data
       - backend-uploads:/app/uploads
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:37888/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   frontend:
     build:
@@ -21,7 +27,8 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:37888
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

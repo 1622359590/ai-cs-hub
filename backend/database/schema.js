@@ -10,6 +10,7 @@ function getDb() {
   if (!db) {
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
+    db.pragma('busy_timeout = 5000');
     db.pragma('foreign_keys = ON');
   }
   return db;
@@ -128,6 +129,16 @@ function initSchema() {
   } catch(e) {
     // 字段已存在则忽略
   }
+
+  // 迁移：工单增加优先级字段
+  try {
+    db.exec("ALTER TABLE tickets ADD COLUMN priority TEXT DEFAULT 'normal'");
+  } catch(e) {}
+
+  // 迁移：工单增加 processed_by 字段（处理人）
+  try {
+    db.exec("ALTER TABLE tickets ADD COLUMN processed_by INTEGER");
+  } catch(e) {}
 
   // 迁移：给 users 表添加 customer_level_id 字段
   try {

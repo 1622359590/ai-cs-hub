@@ -1,7 +1,7 @@
 {
   "name": "imai-work-backend",
   "version": "1.0.0",
-  "description": "imai.work 官网后端",
+  "description": "imai.work \u5b98\u7f51\u540e\u7aef",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -20,5 +20,8 @@
     "natural": "^8.1.1",
     "sqlite-vec": "^0.1.9",
     "xlsx": "^0.18.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }

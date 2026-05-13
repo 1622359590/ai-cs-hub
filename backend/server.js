@@ -16,7 +16,14 @@ const { chat: aiChat, getAIConfig } = require('./services/ai');
 const { aiQueue } = require('./services/queue');
 const { rebuildIndex: rebuildRagIndex, findSimilarLearned: findSimilarLearnedRaw, cleanupLearned } = require('./services/rag');
 // 包装为 fire-and-forget 版本（CRUD 操作后异步重建索引，不阻塞响应）
-function rebuildRagAsync(force = true) { rebuildRagIndex(force).catch(e => console.warn('RAG 重建失败:', e.message)); }
+// RAG 索引重建防抖（3秒内多次 CRUD 只触发一次重建）
+let ragRebuildTimer = null;
+function rebuildRagAsync(force = true) {
+  if (ragRebuildTimer) clearTimeout(ragRebuildTimer);
+  ragRebuildTimer = setTimeout(() => {
+    rebuildRagIndex(force).catch(e => console.warn('RAG 重建失败:', e.message));
+  }, 3000);
+}
 const { parseDocument } = require('./services/doc-parser');
 
 const app = express();
@@ -1282,12 +1289,13 @@ app.post('/api/ai/messages/:id/rate', verifyToken, (req, res) => {
                 }
               } else {
                 db.prepare(
-                  'INSERT INTO ai_knowledge (title, content, category, tags) VALUES (?, ?, ?, ?)'
+                  'INSERT INTO ai_knowledge (title, content, category, tags, status) VALUES (?, ?, ?, ?, ?)'
                 ).run(
                   title,
                   '用户问题：' + question + '\n\n参考回答：' + answer,
                   '自动学习',
-                  JSON.stringify(['auto_learned', '用户好评'])
+                  JSON.stringify(['auto_learned', '用户好评']),
+                  'hidden'  // 自动学习内容需管理员审核后才会被 AI 使用
                 );
                 rebuildRagAsync();
                 console.log('🧠 AI自学习: 保存优秀回答 "' + title + '"');
@@ -1400,10 +1408,30 @@ app.get('/api/admin/ai/conversations', verifyAdminToken, requireAdmin, (req, res
 app.get('/api/admin/ai/knowledge', verifyAdminToken, requireAdmin, (req, res) => {
   try {
     const db = getDb();
-    const items = db.prepare('SELECT * FROM ai_knowledge ORDER BY category, id DESC').all();
+    const { status, category } = req.query;
+    let sql = 'SELECT * FROM ai_knowledge WHERE 1=1';
+    const params = [];
+    if (status) { sql += ' AND status = ?'; params.push(status); }
+    if (category) { sql += ' AND category = ?'; params.push(category); }
+    sql += ' ORDER BY category, id DESC';
+    const items = db.prepare(sql).all(...params);
     res.json({ items });
   } catch (err) {
     res.status(500).json({ error: '获取知识库失败' });
+  }
+});
+
+// 审核自动学习内容（hidden → active）
+app.post('/api/admin/ai/knowledge/:id/approve', verifyAdminToken, requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const item = db.prepare('SELECT * FROM ai_knowledge WHERE id = ?').get(req.params.id);
+    if (!item) return res.status(404).json({ error: '条目不存在' });
+    db.prepare("UPDATE ai_knowledge SET status = 'active', updated_at = datetime('now','localtime') WHERE id = ?").run(req.params.id);
+    rebuildRagAsync();
+    res.json({ ok: true, message: '已通过审核' });
+  } catch (err) {
+    res.status(500).json({ error: '审核失败' });
   }
 });
 

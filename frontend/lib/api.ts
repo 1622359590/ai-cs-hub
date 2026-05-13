@@ -384,7 +384,14 @@ export const aiApi = {
 // ========== AI 管理 ==========
 export const aiAdminApi = {
   getConversations: () => fetchAdminAPI('/admin/ai/conversations'),
-  getKnowledge: () => fetchAdminAPI('/admin/ai/knowledge'),
+  getKnowledge: (params?: { status?: string; category?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set('status', params.status);
+    if (params?.category) q.set('category', params.category);
+    const qs = q.toString();
+    return fetchAdminAPI(`/admin/ai/knowledge${qs ? '?' + qs : ''}`);
+  },
+  approveKnowledge: (id: number) => fetchAdminAPI(`/admin/ai/knowledge/${id}/approve`, { method: 'POST' }),
   createKnowledge: (data: { title: string; content: string; category?: string; tags?: string[] }) =>
     fetchAdminAPI('/admin/ai/knowledge', {
       method: 'POST',
