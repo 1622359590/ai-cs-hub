@@ -710,8 +710,26 @@ app.post('/api/tickets', verifyToken, async (req, res) => {
 app.get('/api/user/tickets', verifyToken, (req, res) => {
   try {
     const db = getDb();
-    const tickets = db.prepare('SELECT * FROM tickets WHERE user_id = ? ORDER BY created_at DESC').all(req.user.id);
-    res.json({ tickets });
+    const { status, search, page = 1, pageSize = 10 } = req.query;
+    const userId = req.user.id;
+    const limit = Math.min(Number(pageSize) || 10, 50);
+    const offset = ((Number(page) || 1) - 1) * limit;
+
+    let where = 'WHERE user_id = ?';
+    const params = [userId];
+
+    if (status && status !== 'all') {
+      where += ' AND status = ?';
+      params.push(status);
+    }
+    if (search) {
+      where += ' AND (title LIKE ? OR description LIKE ?)';
+      params.push('%' + search + '%', '%' + search + '%');
+    }
+
+    const total = db.prepare(`SELECT COUNT(*) as cnt FROM tickets ${where}`).get(...params).cnt;
+    const tickets = db.prepare(`SELECT * FROM tickets ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+    res.json({ tickets, total, page: Number(page) || 1, pageSize: limit });
   } catch (err) {
     console.error('获取工单列表失败:', err);
     res.status(500).json({ error: '获取工单列表失败' });

@@ -338,7 +338,15 @@ export const ticketApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  getMyTickets: () => fetchAPI("/user/tickets"),
+  getMyTickets: (params?: { status?: string; search?: string; page?: number; pageSize?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set('status', params.status);
+    if (params?.search) q.set('search', params.search);
+    if (params?.page) q.set('page', String(params.page));
+    if (params?.pageSize) q.set('pageSize', String(params.pageSize));
+    const qs = q.toString();
+    return fetchAPI(`/user/tickets${qs ? '?' + qs : ''}`);
+  },
   getTicket: (id: number | string) => fetchAPI(`/tickets/${id}`),
 };
 
